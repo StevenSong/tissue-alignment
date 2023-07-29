@@ -10,7 +10,7 @@ def D(p, z):
 class SimSiam(nn.Module):
     def __init__(
         self,
-        *, # enforce kwargs
+        *,  # enforce kwargs
         backbone: str,
         projector_hidden_dim: int,
         predictor_hidden_dim: int,
@@ -18,8 +18,10 @@ class SimSiam(nn.Module):
     ):
         super().__init__()
         self.encoder = get_model(backbone)
-        if not hasattr(self.encoder, 'fc'):
-            raise Exception(f'Unknown how to use {backbone} as backbone for SimSiam model')
+        if not hasattr(self.encoder, "fc"):
+            raise Exception(
+                f"Unknown how to use {backbone} as backbone for SimSiam model"
+            )
 
         self.encoder.fc = nn.Sequential(
             # projector 1

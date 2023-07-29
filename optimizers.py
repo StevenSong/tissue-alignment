@@ -1,10 +1,11 @@
-import torch
 from typing import Optional
 
+import torch
 
 OPTIMIZERS = [
-    'sgd',
+    "sgd",
 ]
+
 
 def get_optimizer(
     *,
@@ -14,9 +15,11 @@ def get_optimizer(
     momentum: Optional[float],
     weight_decay: Optional[float],
 ) -> torch.optim.Optimizer:
-    if name == 'sgd':
+    if name == "sgd":
         if momentum is None or weight_decay is None:
-            raise ValueError(f'Must specify parameters, got {momentum=}, {weight_decay=}')
+            raise ValueError(
+                f"Must specify parameters, got {momentum=}, {weight_decay=}"
+            )
         optimizer = torch.optim.SGD(
             model.parameters(),
             lr=lr,
@@ -24,5 +27,5 @@ def get_optimizer(
             weight_decay=weight_decay,
         )
     else:
-        raise NotImplementedError(f'{name} optimizer not implemented')
+        raise NotImplementedError(f"{name} optimizer not implemented")
     return optimizer

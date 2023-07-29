@@ -1,12 +1,11 @@
 import os
-from typing import List, Union, Optional, Callable
+from typing import Callable, List, Optional, Union
 
 import numpy as np
-from tqdm import tqdm
-
 import torch
 from torch.utils.data import Dataset
 from torchvision.io import read_image
+from tqdm import tqdm
 
 
 class TileDataset(Dataset):
@@ -51,13 +50,13 @@ class TileDataset(Dataset):
         if recompute or self.__mean is None or self.__std is None:
             means = []
             stds = []
-            name = ''
+            name = ""
             if self.name is not None and self.name:
-                name = f'{self.name.title()} '
-            for i in tqdm(range(len(self)), desc=f'Computing {name}Dataset Norm'):
+                name = f"{self.name.title()} "
+            for i in tqdm(range(len(self)), desc=f"Computing {name}Dataset Norm"):
                 tile = self[i].to(float)
-                means.append(tile.mean(axis=(1,2)))
-                stds.append(tile.std(axis=(1,2)))
+                means.append(tile.mean(axis=(1, 2)))
+                stds.append(tile.std(axis=(1, 2)))
             self.__mean = np.asarray(means).mean(axis=0)
             self.__std = np.asarray(stds).mean(axis=0)
         return self.__mean, self.__std
