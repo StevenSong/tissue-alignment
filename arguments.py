@@ -8,6 +8,14 @@ from schedulers import SCHEDULERS
 def parse_args():
     parser = argparse.ArgumentParser()
 
+    # RUN ARGS
+    parser.add_argument(
+        "--output_dir",
+        type=str,
+        required=True,
+        help="Output folder to store results in.",
+    )
+
     # DATA ARGS
     parser.add_argument(
         "--tile_dir",

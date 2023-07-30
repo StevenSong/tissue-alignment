@@ -1,3 +1,5 @@
+import os
+
 import torch
 from torch.utils.data import DataLoader
 from tqdm import tqdm
@@ -89,6 +91,15 @@ def train(args):
                     tiles1, tiles2 = tiles1.to("cuda"), tiles2.to("cuda")
                     eval_outputs = model(tiles1, tiles2)
                     eval_loss = eval_outputs["loss"]
+        mpath = os.path.join(args.output_dir, f"checkpoints/{epoch:04}.pt")
+        os.makedirs(os.path.dirname(mpath), exist_ok=True)
+        torch.save(
+            {
+                "epoch": epoch + 1,
+                "state_dict": model.state_dict(),
+            },
+            mpath,
+        )
 
 
 if __name__ == "__main__":
