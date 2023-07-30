@@ -4,6 +4,9 @@ python train.py \
 --output_dir /mnt/data5/spatial/delete-me \
 --tile_dir \
 /mnt/data5/spatial/tiles/slide1 \
+/mnt/data5/spatial/tiles/slide2 \
+/mnt/data5/spatial/tiles/slide3 \
+/mnt/data5/spatial/tiles/slide4 \
 --backbone resnet50 \
 --projector_hidden_dim 2048 \
 --predictor_hidden_dim 512 \
@@ -16,8 +19,3 @@ python train.py \
 --weight_decay 1e-4 \
 --scheduler cosine \
 --num_workers 16
-
-
-# /mnt/data5/spatial/tiles/slide3 \
-# /mnt/data5/spatial/tiles/slide4 \
-# --eval_tile_dir /mnt/data5/spatial/tiles/slide2 \
