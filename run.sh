@@ -1,7 +1,8 @@
 #!/bin/bash
 
 python train.py \
---output_dir /mnt/data5/spatial/delete-me \
+--output_dir /mnt/data5/spatial/runs \
+--checkpoint_interval 100 \
 --tile_dir \
 /mnt/data5/spatial/tiles/slide1 \
 /mnt/data5/spatial/tiles/slide2 \
@@ -13,7 +14,7 @@ python train.py \
 --output_dim 2048 \
 --batch_size 256 \
 --lr 0.05 \
---num_epochs 100 \
+--num_epochs 1000 \
 --optimizer sgd \
 --momentum 0.9 \
 --weight_decay 1e-4 \

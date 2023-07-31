@@ -35,7 +35,6 @@ def train(args):
         shuffle=True,
         num_workers=args.num_workers,
         pin_memory=True,
-        drop_last=True,
     )
 
     if args.eval_tile_dir:
@@ -51,10 +50,8 @@ def train(args):
             shuffle=False,
             num_workers=args.num_workers,
             pin_memory=True,
-            drop_last=True,
         )
-    # TODO should probably remove drop_last from both DLs, but need to scale loss in
-    # logging by batch size to avoid weird spikes in loss curve at end of epoch
+
     # load model and optimizer
     model = SimSiam(
         backbone=args.backbone,
@@ -116,15 +113,16 @@ def train(args):
                     "Loss/eval/epoch", np.asarray(eval_losses).mean(), epoch
                 )
 
-        mpath = os.path.join(args.output_dir, f"checkpoints/{epoch:04}.pt")
-        os.makedirs(os.path.dirname(mpath), exist_ok=True)
-        torch.save(
-            {
-                "epoch": epoch + 1,
-                "state_dict": model.state_dict(),
-            },
-            mpath,
-        )
+        if epoch + 1 % args.checkpoint_interval == 0:
+            mpath = os.path.join(args.output_dir, f"checkpoints/{epoch:04}.pt")
+            os.makedirs(os.path.dirname(mpath), exist_ok=True)
+            torch.save(
+                {
+                    "epoch": epoch + 1,
+                    "state_dict": model.state_dict(),
+                },
+                mpath,
+            )
 
 
 if __name__ == "__main__":

@@ -15,6 +15,12 @@ def parse_args():
         required=True,
         help="Output folder to store results in.",
     )
+    parser.add_argument(
+        "--checkpoint_interval",
+        type=int,
+        required=True,
+        help="Number of epochs between checkpoints.",
+    )
 
     # DATA ARGS
     parser.add_argument(
