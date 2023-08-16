@@ -1,7 +1,7 @@
 #!/bin/bash
 
 python train.py \
---output_dir /mnt/data5/spatial/runs \
+--output_dir /mnt/data5/spatial/runs/all-slides \
 --checkpoint_interval 100 \
 --tile_dir \
 /mnt/data5/spatial/tiles/slide1 \

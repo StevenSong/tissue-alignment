@@ -24,6 +24,7 @@ def train(args):
         tile_dir=args.tile_dir,
         file_ext=args.file_ext,
     )
+    # TODO write mean, std to logs
     mean, std = train_ds.get_mean_std()
     tile_size = train_ds.get_tile_size()
     augmentation = simsiam_augmentation(size=tile_size, mean=mean, std=std)
@@ -91,9 +92,9 @@ def train(args):
             train_loss = train_loss.detach().to("cpu")
             train_losses.append(train_loss)
             writer.add_scalar(
-                "Loss/train/step", train_loss, train_step + epoch * len(train_dl)
+                "loss/train/step", train_loss, train_step + epoch * len(train_dl)
             )
-        writer.add_scalar("Loss/train/epoch", np.asarray(train_losses).mean(), epoch)
+        writer.add_scalar("loss/train/epoch", np.asarray(train_losses).mean(), epoch)
 
         if args.eval_tile_dir:
             model.eval()
@@ -106,20 +107,17 @@ def train(args):
                     eval_loss = model(tiles1, tiles2)
                     eval_loss = eval_loss.detach().to("cpu")
                     eval_losses.append(eval_loss)
-                    writer.add_scalar(
-                        "Loss/eval/step", eval_loss, eval_step + epoch * len(eval_dl)
-                    )
-                writer.add_scalar(
-                    "Loss/eval/epoch", np.asarray(eval_losses).mean(), epoch
-                )
+            writer.add_scalar("loss/eval/epoch", np.asarray(eval_losses).mean(), epoch)
 
-        if epoch + 1 % args.checkpoint_interval == 0:
+        if (epoch + 1) % args.checkpoint_interval == 0:
             mpath = os.path.join(args.output_dir, f"checkpoints/{epoch:04}.pt")
             os.makedirs(os.path.dirname(mpath), exist_ok=True)
             torch.save(
                 {
                     "epoch": epoch + 1,
                     "state_dict": model.state_dict(),
+                    "data_mean": mean,
+                    "data_std": std,
                 },
                 mpath,
             )
