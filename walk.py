@@ -1,11 +1,13 @@
 import argparse
 import json
 import os
+from collections import defaultdict
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import torch
+from matplotlib import colormaps
 from matplotlib.collections import PatchCollection
 from matplotlib.colors import TABLEAU_COLORS, to_rgba
 from matplotlib.patches import Circle
@@ -23,7 +25,9 @@ def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--adjacency", choices=["hex", "embed"], default="hex")
     parser.add_argument(
-        "--avg-expression", choices=["off", "hex", "embed"], default="off"
+        "--avg-expression",
+        choices=["off", "hex", "embed", "path-clusters", "orthogonal-paths"],
+        default="off",
     )
     parser.add_argument("--num-neighbors", type=int, default=6)
     parser.add_argument(
@@ -34,6 +38,7 @@ def parse_args():
     )
     parser.add_argument("--data-root", default="/mnt/data5/spatial")
     parser.add_argument("--section", default="slide3/A1")
+    parser.add_argument("--model", default="simsiam-all-slides-0999")
     parser.add_argument(
         "--distance-metric",
         choices=sorted(list(PAIRWISE_DISTANCE_FUNCTIONS.keys())),
@@ -50,6 +55,7 @@ def parse_args():
     parser.add_argument("--max-iter", type=int, default=1000)
     parser.add_argument("--tol", type=float, default=1e-4)
     parser.add_argument("--fit-all-centroids", action="store_true")
+    parser.add_argument("--max-depth", type=int, default=10)
     args = parser.parse_args()
     return args
 
@@ -112,56 +118,71 @@ def read_transcription_data(count_path, pos_df, genes):
     return counts
 
 
-def read_embedding_data(data_root, section):
-    return torch.load(
-        os.path.join(data_root, "embeddings/all-slides-model/embeddings.pt")
-    )[section].numpy()
+def read_embedding_data(data_root, model, section):
+    return torch.load(os.path.join(data_root, f"embeddings/{model}/embeddings.pt"))[
+        section
+    ].numpy()
+
+
+def get_hex_grid_adj_matrix(pos_df):
+    # TODO can probably precompute this whole matrix and simply sort by spot ordering...
+    n = len(pos_df)
+    rows = np.asarray(pos_df[["row"]])
+    cols = np.asarray(pos_df[["col"]])
+    rows_mx = np.broadcast_to(rows, (n, n))
+    cols_mx = np.broadcast_to(cols, (n, n))
+    adj_spots = (
+        # spots 1 row away are 1 col away
+        ((rows_mx == (rows_mx - 1).T) | (rows_mx == (rows_mx + 1).T))
+        & ((cols_mx == (cols_mx - 1).T) | (cols_mx == (cols_mx + 1).T))
+    ) | (
+        # spots in same row are 2 cols away
+        (rows_mx == rows_mx.T)
+        & ((cols_mx == (cols_mx - 2).T) | (cols_mx == (cols_mx + 2).T))
+    )
+    assert adj_spots.sum(axis=0).max() <= 6
+    return adj_spots
+
+
+def get_embedding_adj_matrix(distances, num_neighbors):
+    n = len(distances)
+    neighbors = distances.argsort(axis=1)[:, :num_neighbors]
+    mask = np.zeros_like(distances, dtype=bool)
+    mask[np.arange(n)[:, None], neighbors] = 1
+    assert mask.sum() == n * num_neighbors
+    return mask
 
 
 def compute_distance_matrix(embeddings, distance_metric, pos_df, num_neighbors):
-    def get_adj_spots(pos_df, spot_row, spot_col):
-        adj_idxs = pos_df[
-            (
-                # spots 1 row away are 1 col away
-                ((pos_df["row"] == spot_row - 1) | (pos_df["row"] == spot_row + 1))
-                & ((pos_df["col"] == spot_col - 1) | (pos_df["col"] == spot_col + 1))
-            )
-            | (
-                # spots in same row are 2 cols away
-                (pos_df["row"] == spot_row)
-                & ((pos_df["col"] == spot_col - 2) | (pos_df["col"] == spot_col + 2))
-            )
-        ].index
-        return adj_idxs
-
+    # computes both kinds of adjacency in case expression averaging needs
     distances = pairwise_distances(embeddings, metric=distance_metric)
-    # compute both kinds of adjacency in case expression averaging needs
-    distances_hex = np.empty_like(distances)
-    distances_embed = np.empty_like(distances)
-    for idx, spot in pos_df.iterrows():
-        spot_row, spot_col = spot["row"], spot["col"]
 
-        # hex grid adjacency
-        hex_adj_idxs = get_adj_spots(
-            pos_df=pos_df, spot_row=spot_row, spot_col=spot_col
-        )
-        # distance 0 is treated as unreachable by path alg
-        distances_hex[idx] = np.where(
-            pos_df.index.isin(hex_adj_idxs), distances[idx], 0
-        )
+    # hex grid adjacency
+    hex_adj_mx = get_hex_grid_adj_matrix(pos_df=pos_df)
+    # distance 0 is treated as unreachable by path alg
+    distances_hex = np.where(hex_adj_mx, distances, 0)
 
-        # embedding space adjacency
-        embed_adj_idxs = np.argsort(distances[idx])[:num_neighbors]
-        distances_embed[idx] = np.where(
-            pos_df.index.isin(embed_adj_idxs), distances[idx], 0
-        )
-    return distances_hex, distances_embed
+    # embedding space adjacency
+    embed_adj_mx = get_embedding_adj_matrix(
+        distances=distances, num_neighbors=num_neighbors
+    )
+    distances_embed = np.where(embed_adj_mx, distances, 0)
+    return (distances_hex, hex_adj_mx), (distances_embed, embed_adj_mx)
+
+
+def _get_clusters(embeddings, centroids):
+    distances = np.linalg.norm(
+        embeddings - np.repeat(centroids[:, None, :], len(embeddings), axis=1),
+        axis=-1,
+    )  # euclidean distance
+    clusters = distances.argmin(axis=0)
+    return clusters
 
 
 def compute_clusters(
     embeddings, num_clusters, max_iter, tol, start_idx, end_idx, fit_all_centroids
 ):
-    print("Computer clusters")
+    print("Computing clusters")
     if fit_all_centroids:
         skip = 0
         idxs = np.random.choice(len(embeddings), size=num_clusters, replace=False)
@@ -177,11 +198,7 @@ def compute_clusters(
     centroids = embeddings[idxs]
     last_centroids = np.full_like(centroids, 9999)
     for _ in tqdm(enumerate(range(max_iter))):
-        distances = np.linalg.norm(
-            embeddings - np.repeat(centroids[:, None, :], len(embeddings), axis=1),
-            axis=-1,
-        )  # euclidean distance
-        clusters = distances.argmin(axis=0)
+        clusters = _get_clusters(embeddings=embeddings, centroids=centroids)
 
         # frobenius norm
         if np.sqrt(np.power(centroids - last_centroids, 2).sum()) < tol:
@@ -208,22 +225,41 @@ def compute_path_idxs(distances, path_alg, start_idx, end_idx):
         prev_idx = predecessors[prev_idx]
     path_idxs.append(start_idx)
     path_idxs = path_idxs[::-1]
-    return path_idxs
+    return path_idxs  # either list or list of lists
 
 
 def get_path_counts(
-    avg_expression, counts, path_idxs, distances_hex, distances_embed, genes
+    avg_expression,
+    counts,
+    path_idxs,
+    distances_hex,
+    distances_embed,
+    genes,
+    clusters,
 ):
     if avg_expression == "hex":
-        distances = distances_hex
+        adj_idxs_fn = lambda i_idx: distances_hex[i_idx[1]].nonzero()[0]
     elif avg_expression == "embed":
-        distances = distances_embed
+        adj_idxs_fn = lambda i_idx: distances_embed[i_idx[1]].nonzero()[0]
+    elif avg_expression == "path-clusters":
+        adj_idxs_fn = lambda i_idx: np.nonzero(clusters == i_idx[0])[0]
+    elif avg_expression == "orthogonal-paths":
+        # path_idxs is list of list of ints
+        x = np.linspace(0, 1, 100)
+        path_counts = {gene: np.zeros(100, dtype=float) for gene in genes}
+        for _path_idxs in path_idxs:
+            xp = np.linspace(0, 1, len(_path_idxs))
+            _path_counts = counts.loc[_path_idxs, genes]
+            for gene in genes:
+                path_counts[gene] += np.interp(x=x, xp=xp, fp=_path_counts[gene])
+        path_counts = pd.DataFrame(path_counts) / len(path_idxs)
+        return path_counts
     else:  # avg_expression == 'off'
         return counts.loc[path_idxs, genes]
 
     path_counts = {}
-    for path_idx in path_idxs:
-        adj_idxs = distances[path_idx].nonzero()[0]
+    for path_i, path_idx in enumerate(path_idxs):
+        adj_idxs = adj_idxs_fn((path_i, path_idx))
         avg = counts.loc[adj_idxs, genes].mean(axis=0)
         path_counts[path_idx] = avg
     path_counts = pd.DataFrame(path_counts).T
@@ -269,6 +305,98 @@ def select_start(ax1, pos_df, start_idx, circs, edgecolors, alphas):
     circs.set_alpha(alphas)
 
 
+def get_orthogonal_spot(embeddings, adj_mx, curr_idx, next_idx):
+    adj_idxs = adj_mx[curr_idx].copy()
+    adj_idxs[next_idx] = 0
+    adj_diffs = embeddings[adj_idxs] - embeddings[curr_idx]
+    next_diff = embeddings[next_idx] - embeddings[curr_idx]
+    adj_norm = adj_diffs / np.linalg.norm(adj_diffs, axis=1)[:, None]
+    next_norm = next_diff / np.linalg.norm(next_diff)
+    dot_prods = np.abs(adj_norm.dot(next_norm))
+    orthogonal_idx = adj_idxs.nonzero()[0][dot_prods.argmin()]
+    return orthogonal_idx
+
+
+def get_orthogonal_paths(
+    adjacency,
+    hex_adj_mx,
+    embed_adj_mx,
+    path_idxs,
+    start_idx,
+    end_idx,
+    max_depth,
+    embeddings,
+    path_alg,
+    distances_hex,
+    distances_embed,
+):
+    print("Computing orthogonal paths")
+    if adjacency == "hex":
+        _adj_mx = hex_adj_mx
+        _distances = distances_hex
+    else:  # adjacency == 'embed'
+        _adj_mx = embed_adj_mx
+        _distances = distances_embed
+
+    # 1. for start/end spots:
+    #    a: get adjacent spot embeddings
+    #    b: get norm of vector from spot to adj spots
+    #    c: get dot product of each vector to vector of path direction
+    #    d: pick most orthogonal vector, define corresponding spot as new start/end spot
+    # 2: get path between new start/end spot
+    # 3: recurse, stop at depth 10
+    all_path_idxs = [path_idxs]
+    stack = [
+        (
+            0,  # recursion depth
+            start_idx,
+            end_idx,
+            path_idxs,
+        )
+    ]
+
+    def loop_gen(stack):
+        while len(stack):
+            yield
+
+    for _ in tqdm(loop_gen(stack)):
+        _depth, _start_idx, _end_idx, _path_idxs = stack.pop()
+        if _depth >= max_depth:
+            continue
+        _new_depth = _depth + 1
+        _new_start_idx = get_orthogonal_spot(
+            embeddings=embeddings,
+            adj_mx=_adj_mx,
+            curr_idx=_start_idx,
+            next_idx=_path_idxs[1],
+        )
+        _new_end_idx = get_orthogonal_spot(
+            embeddings=embeddings,
+            adj_mx=_adj_mx,
+            curr_idx=_end_idx,
+            next_idx=_path_idxs[-2],
+        )
+        # prevent using the same path as the previous path
+        # also prevent next iteration from choosing current spot as orthogonal
+        for mx in [hex_adj_mx, embed_adj_mx, distances_hex, distances_embed]:
+            mx[_start_idx, _new_start_idx] = 0
+            mx[_new_start_idx, _start_idx] = 0
+            mx[_end_idx, _new_end_idx] = 0
+            mx[_new_end_idx, _end_idx] = 0
+            for i, j in zip(_path_idxs[:-1], _path_idxs[1:]):
+                mx[i, j] = 0
+                mx[j, i] = 0
+        _new_path_idxs = compute_path_idxs(
+            distances=_distances,
+            path_alg=path_alg,
+            start_idx=_new_start_idx,
+            end_idx=_new_end_idx,
+        )
+        all_path_idxs.append(_new_path_idxs)
+        stack.append((_new_depth, _new_start_idx, _new_end_idx, _new_path_idxs))
+    return all_path_idxs
+
+
 def select_end(
     ax1,
     ax2,
@@ -280,30 +408,61 @@ def select_end(
     avg_expression,
     counts,
     distances_hex,
+    hex_adj_mx,
     distances_embed,
+    embed_adj_mx,
     adjacency,
     circs,
     facecolors,
     edgecolors,
     alphas,
+    embeddings,
+    max_depth,
     clusters=None,
 ):
-    # facecolor for clusters
-    # edgecolor for path
-    if clusters is not None:
-        facecolors = np.asarray([list(to_rgba(COLORS[i])) for i in clusters])
     path_idxs = compute_path_idxs(
         distances=(distances_hex if adjacency == "hex" else distances_embed),
         path_alg=path_alg,
         start_idx=start_idx,
         end_idx=end_idx,
     )
+
+    # edgecolor for path
     count = 1
     for path_idx in path_idxs[1:]:  # last index includes end_idx
         edgecolors[path_idx] = to_rgba("tab:red")
         alphas[path_idx] = 1
         ax1.annotate(str(count), pos_df.loc[path_idx, ["x", "y"]], color="tab:red")
         count += 1
+
+    # facecolor for clusters
+    if clusters is not None:
+        facecolors = np.asarray([list(to_rgba(COLORS[i])) for i in clusters])
+    elif avg_expression == "path-clusters":
+        clusters = _get_clusters(embeddings=embeddings, centroids=embeddings[path_idxs])
+        cmap = colormaps["gist_rainbow"]
+        cmap_interp = np.linspace(0, 1, len(path_idxs))
+        facecolors = np.asarray([list(cmap(cmap_interp[i])) for i in clusters])
+    elif avg_expression == "orthogonal-paths":
+        all_path_idxs = get_orthogonal_paths(
+            adjacency=adjacency,
+            hex_adj_mx=hex_adj_mx,
+            embed_adj_mx=embed_adj_mx,
+            path_idxs=path_idxs,
+            start_idx=start_idx,
+            end_idx=end_idx,
+            max_depth=max_depth,
+            embeddings=embeddings,
+            path_alg=path_alg,
+            distances_hex=distances_hex,
+            distances_embed=distances_embed,
+        )
+        cmap = colormaps["viridis"]
+        for _path_idxs in all_path_idxs:
+            cmap_interp = np.linspace(0, 1, len(_path_idxs))
+            for i, _idx in enumerate(_path_idxs):
+                facecolors[_idx] = cmap(cmap_interp[i])
+        path_idxs = all_path_idxs
 
     circs.set_facecolor(facecolors)
     circs.set_edgecolor(edgecolors)
@@ -316,13 +475,14 @@ def select_end(
         distances_hex=distances_hex,
         distances_embed=distances_embed,
         genes=genes,
+        clusters=clusters,
     )
     for gene in genes:
-        ax2.scatter(x=range(len(path_idxs)), y=list(path_counts[gene]), label=gene)
+        ax2.scatter(x=range(len(path_counts)), y=list(path_counts[gene]), label=gene)
     ax2.set_title("Gene expression along path")
     ax2.set_ylabel("LogNorm Expression")
     ax2.set_xlabel("Path Index")
-    ax2.set_xticks(list(range(len(path_idxs))))
+    ax2.set_xticks(list(range(len(path_counts))))
     ax2.legend()
 
 
@@ -334,9 +494,14 @@ def main(args):
         count_path=count_path, pos_df=pos_df, genes=args.genes
     )
     print("Loaded transcription counts")
-    embeddings = read_embedding_data(data_root=args.data_root, section=args.section)
+    embeddings = read_embedding_data(
+        data_root=args.data_root, model=args.model, section=args.section
+    )
     print("Loaded embeddings")
-    distances_hex, distances_embed = compute_distance_matrix(
+    (distances_hex, hex_adj_mx), (
+        distances_embed,
+        embed_adj_mx,
+    ) = compute_distance_matrix(
         embeddings=embeddings,
         distance_metric=args.distance_metric,
         pos_df=pos_df,
@@ -387,12 +552,16 @@ def main(args):
                 avg_expression=args.avg_expression,
                 counts=counts,
                 distances_hex=distances_hex,
+                hex_adj_mx=hex_adj_mx,
                 distances_embed=distances_embed,
+                embed_adj_mx=embed_adj_mx,
                 adjacency=args.adjacency,
                 circs=circs,
                 facecolors=facecolors,
                 edgecolors=edgecolors,
                 alphas=alphas,
+                embeddings=embeddings,
+                max_depth=args.max_depth,
                 clusters=clusters,
             )
 

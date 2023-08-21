@@ -20,9 +20,10 @@ cols = [
 ]
 
 spot_radius = 86 // 2
+tile_shape = (spot_radius * 2, spot_radius * 2, 3)
 
 count = 0
-discarded = 0
+padded = 0
 for slide in tqdm([1, 2, 3, 4], desc="Slide"):
     for section in tqdm(["A", "B", "C", "D"], desc="Section"):
         spath = f"slide{slide}/{section}1"
@@ -51,10 +52,12 @@ for slide in tqdm([1, 2, 3, 4], desc="Slide"):
             row_lo, row_hi = row - spot_radius, row + spot_radius
             col_lo, col_hi = col - spot_radius, col + spot_radius
             tile = im[row_lo:row_hi, col_lo:col_hi]
-            if tile.shape != (spot_radius * 2, spot_radius * 2, 3):
-                discarded += 1
-                continue
+            if tile.shape != tile_shape:
+                new_tile = np.full(tile_shape, 255, dtype=tile.dtype)
+                new_tile[: tile.shape[0], : tile.shape[1], : tile.shape[2]] = tile
+                tile = new_tile
+                padded += 1
             Image.fromarray(tile).save(os.path.join(opath, f'{spot["barcode"]}.png'))
 
-print(f"Discarded {discarded} tiles")
-print(f"Saved {count-discarded} tiles")
+print(f"Padded {padded} tiles")
+print(f"Saved {count} tiles")
