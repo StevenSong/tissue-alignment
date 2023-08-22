@@ -189,7 +189,7 @@ def __hex_grid_adjacency_matrix(
     *,  # enforce kwargs
     pos_paths: List[str],
     data_paths: List[str],
-) -> Tuple[np.ndarray, pd.DataFrame]:
+) -> Tuple[np.ndarray, np.ndarray, pd.DataFrame]:
     cols = [
         "barcode",
         "in_tissue",
@@ -223,27 +223,29 @@ def __hex_grid_adjacency_matrix(
     rows_mx = np.broadcast_to(rows, (n, n))
     cols_mx = np.broadcast_to(cols, (n, n))
     idxs_mx = np.broadcast_to(idxs, (n, n))
+    slide_spots = idxs_mx == idxs_mx.T
     adj_spots = (
-        idxs_mx == idxs_mx.T
-    ) & (  # adj spots must come from same slide/section
-        (
-            # spots 1 row away are 1 col away
-            ((rows_mx == (rows_mx - 1).T) | (rows_mx == (rows_mx + 1).T))
-            & ((cols_mx == (cols_mx - 1).T) | (cols_mx == (cols_mx + 1).T))
-        )
-        | (
-            # spots in same row are 2 cols away
-            (rows_mx == rows_mx.T)
-            & ((cols_mx == (cols_mx - 2).T) | (cols_mx == (cols_mx + 2).T))
-        )
+        # spots 1 row away are 1 col away
+        ((rows_mx == (rows_mx - 1).T) | (rows_mx == (rows_mx + 1).T))
+        & ((cols_mx == (cols_mx - 1).T) | (cols_mx == (cols_mx + 1).T))
+    ) | (
+        # spots in same row are 2 cols away
+        (rows_mx == rows_mx.T)
+        & ((cols_mx == (cols_mx - 2).T) | (cols_mx == (cols_mx + 2).T))
     )
+    # adj spots must come from same slide/section
+    adj_spots &= slide_spots
     assert adj_spots.sum(axis=0).max() <= 6
-    return adj_spots, pos_df
+    # non-adj spots must also come from same slide/section
+    non_adj_spots = ~adj_spots & slide_spots
+    breakpoint()
+    return adj_spots, non_adj_spots, pos_df
 
 
 def __get_adj_tile_triplet_transform(
     *,  # enforce kwargs
     adj_spots: np.ndarray,
+    non_adj_spots: np.ndarray,
     mean: Tuple[float, float, float],
     std: Tuple[float, float, float],
 ) -> TRANSFORM_FN:
@@ -262,7 +264,7 @@ def __get_adj_tile_triplet_transform(
             # not ideal but there's very few of these in the dataset (~0.1%)
             pos_idxs = [idx]
         pos_idx = np.random.choice(pos_idxs, 1)[0]
-        neg_idxs = (~adj_spots[idx]).nonzero()[0]
+        neg_idxs = non_adj_spots[idx].nonzero()[0]
         neg_idx = np.random.choice(neg_idxs, 1)[0]
         pos = ds.get_raw_tile(pos_idx)
         neg = ds.get_raw_tile(neg_idx)
@@ -287,7 +289,7 @@ def get_pathology_adj_tile_triplet_loaders(
     assert "position_table" in loader_params
     assert len(loader_params["position_table"]) == len(data_paths)
     print("Computing Hex Grid Adjacency Matrix")
-    adj_spots, pos_df = __hex_grid_adjacency_matrix(
+    adj_spots, non_adj_spots, pos_df = __hex_grid_adjacency_matrix(
         pos_paths=loader_params["position_table"],
         data_paths=data_paths,
     )
@@ -300,6 +302,7 @@ def get_pathology_adj_tile_triplet_loaders(
     mean, std = train_ds.get_mean_std()
     transform = __get_adj_tile_triplet_transform(
         adj_spots=adj_spots,
+        non_adj_spots=non_adj_spots,
         mean=mean,
         std=std,
     )
@@ -316,14 +319,20 @@ def get_pathology_adj_tile_triplet_loaders(
     if eval_data_paths:
         assert "position_table" in eval_loader_params
         assert len(eval_loader_params["position_table"]) == len(eval_data_paths)
-        eval_adj_spots, eval_pos_df = __hex_grid_adjacency_matrix(
+        eval_adj_spots, eval_non_adj_spots, eval_pos_df = __hex_grid_adjacency_matrix(
             pos_paths=eval_loader_params["position_table"],
             data_paths=eval_data_paths,
+        )
+        eval_transform = __get_adj_tile_triplet_transform(
+            adj_spots=eval_adj_spots,
+            non_adj_spots=eval_non_adj_spots,
+            mean=mean,
+            std=std,
         )
         eval_ds = TileDataset(
             name="eval",
             tile_dirs=eval_data_paths,
-            transform=transform,
+            transform=eval_transform,
         )
         assert len(eval_ds.tile_paths) == len(eval_pos_df)
         eval_ds.tile_paths = eval_pos_df["tile_path"].to_list()
