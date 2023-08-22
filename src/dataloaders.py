@@ -238,7 +238,6 @@ def __hex_grid_adjacency_matrix(
     assert adj_spots.sum(axis=0).max() <= 6
     # non-adj spots must also come from same slide/section
     non_adj_spots = ~adj_spots & slide_spots
-    breakpoint()
     return adj_spots, non_adj_spots, pos_df
 
 
