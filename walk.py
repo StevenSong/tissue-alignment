@@ -599,6 +599,7 @@ def main(args):
                 embeddings=embeddings,
                 max_depth=args.max_depth,
                 clusters=clusters,
+                cluster_frac=args.cluster_frac,
             )
 
     start_idx = -1
