@@ -30,12 +30,6 @@ def parse_args():
         default="off",
     )
     parser.add_argument("--num-neighbors", type=int, default=6)
-    parser.add_argument(
-        "--num-clusters",
-        type=int,
-        default=1,
-        help="enable kmeans clustering by setting num clusters > 1",
-    )
     parser.add_argument("--data-root", default="/mnt/data5/spatial")
     parser.add_argument("--section", default="slide3/A1")
     parser.add_argument("--model", default="simsiam-all-slides-0999")
@@ -51,11 +45,26 @@ def parse_args():
         help="see available methods at https://docs.scipy.org/doc/scipy/reference/generated/scipy.sparse.csgraph.shortest_path.html",
     )
     parser.add_argument("--fullres", action="store_true")
-    parser.add_argument("--genes", nargs="+", default=["EPCAM", "CEACAM7"])
+    parser.add_argument("--genes", nargs="+", default=["EPCAM", "ACTA2"])
+    parser.add_argument("--figsize", type=int, default=10)
+
+    # k means
+    parser.add_argument(
+        "--num-clusters",
+        type=int,
+        default=1,
+        help="enable kmeans clustering by setting num clusters > 1",
+    )
     parser.add_argument("--max-iter", type=int, default=1000)
     parser.add_argument("--tol", type=float, default=1e-4)
     parser.add_argument("--fit-all-centroids", action="store_true")
+
+    # orthogonal paths
     parser.add_argument("--max-depth", type=int, default=10)
+
+    # path clusters
+    parser.add_argument("--cluster-frac", type=float, default=1)
+
     args = parser.parse_args()
     return args
 
@@ -170,12 +179,29 @@ def compute_distance_matrix(embeddings, distance_metric, pos_df, num_neighbors):
     return (distances_hex, hex_adj_mx), (distances_embed, embed_adj_mx)
 
 
-def _get_clusters(embeddings, centroids):
+def _get_clusters(embeddings, centroids, cluster_frac=1):
+    assert cluster_frac >= 0 and cluster_frac <= 1
+    n = len(embeddings)
+    k = len(centroids)
+
     distances = np.linalg.norm(
-        embeddings - np.repeat(centroids[:, None, :], len(embeddings), axis=1),
+        embeddings - np.repeat(centroids[:, None, :], n, axis=1),
         axis=-1,
     )  # euclidean distance
     clusters = distances.argmin(axis=0)
+
+    if cluster_frac != 1:
+        for i in range(k):
+            cluster_idxs = (clusters == i).nonzero()[0]
+            cluster_n = len(cluster_idxs)
+            cluster_end = max(1, int(cluster_n * cluster_frac))
+            cluster_idxs_rank = distances[
+                i, cluster_idxs
+            ].argsort()  # get sorted order of cluster idxs
+            cluster_idxs = cluster_idxs[
+                cluster_idxs_rank
+            ]  # get sorted order of global idxs
+            clusters[cluster_idxs[cluster_end:]] = -1  # set outliers to no cluster
     return clusters
 
 
@@ -418,6 +444,7 @@ def select_end(
     alphas,
     embeddings,
     max_depth,
+    cluster_frac,
     clusters=None,
 ):
     path_idxs = compute_path_idxs(
@@ -439,10 +466,19 @@ def select_end(
     if clusters is not None:
         facecolors = np.asarray([list(to_rgba(COLORS[i])) for i in clusters])
     elif avg_expression == "path-clusters":
-        clusters = _get_clusters(embeddings=embeddings, centroids=embeddings[path_idxs])
+        clusters = _get_clusters(
+            embeddings=embeddings,
+            centroids=embeddings[path_idxs],
+            cluster_frac=cluster_frac,
+        )
         cmap = colormaps["gist_rainbow"]
         cmap_interp = np.linspace(0, 1, len(path_idxs))
-        facecolors = np.asarray([list(cmap(cmap_interp[i])) for i in clusters])
+        facecolors = np.asarray(
+            [
+                list(cmap(cmap_interp[i])) if i != -1 else facecolors[idx]
+                for idx, i in enumerate(clusters)
+            ]
+        )
     elif avg_expression == "orthogonal-paths":
         all_path_idxs = get_orthogonal_paths(
             adjacency=adjacency,
@@ -569,7 +605,7 @@ def main(args):
     start_set = False
 
     plt.ion()
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 5))
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(args.figsize * 2, args.figsize))
     clusters = None
     if args.num_clusters > 1 and args.fit_all_centroids:
         clusters = compute_clusters(
