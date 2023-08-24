@@ -31,8 +31,8 @@ def parse_args():
     )
     parser.add_argument("--num-neighbors", type=int, default=6)
     parser.add_argument("--data-root", default="/mnt/data5/spatial")
-    parser.add_argument("--section", default="slide3/A1")
-    parser.add_argument("--model", default="simsiam-all-slides-0999")
+    parser.add_argument("--sections", default=["slide3/A1"], nargs="+")
+    parser.add_argument("--model", default="triplet-old-all-slides-0999")
     parser.add_argument(
         "--distance-metric",
         choices=sorted(list(PAIRWISE_DISTANCE_FUNCTIONS.keys())),
@@ -46,7 +46,8 @@ def parse_args():
     )
     parser.add_argument("--fullres", action="store_true")
     parser.add_argument("--genes", nargs="+", default=["EPCAM", "ACTA2"])
-    parser.add_argument("--figsize", type=int, default=10)
+    parser.add_argument("--figsize", type=int, default=8)
+    parser.add_argument("--output-dir", required=True)
 
     # k means
     parser.add_argument(
@@ -304,8 +305,8 @@ def read_image(data_root, section, fullres):
     return im
 
 
-def show_slide(ax1, im, pos_df, spot_radius, clusters=None):
-    ax1.imshow(im)
+def show_slide(ax, im, pos_df, spot_radius, clusters=None):
+    ax.imshow(im)
     circs = PatchCollection(
         [Circle((x, y), spot_radius) for x, y in pos_df[["x", "y"]].to_numpy()],
         picker=True,
@@ -319,14 +320,14 @@ def show_slide(ax1, im, pos_df, spot_radius, clusters=None):
     circs.set_facecolor(facecolors)
     circs.set_edgecolor(edgecolors)
     circs.set_alpha(alphas)
-    ax1.add_collection(circs)
+    ax.add_collection(circs)
     return circs, facecolors, edgecolors, alphas
 
 
-def select_start(ax1, pos_df, start_idx, circs, edgecolors, alphas):
+def select_start(ax, pos_df, start_idx, circs, edgecolors, alphas):
     edgecolors[start_idx] = to_rgba("tab:red")
     alphas[start_idx] = 1
-    ax1.annotate(str(0), pos_df.loc[start_idx, ["x", "y"]], color="tab:red")
+    ax.annotate(str(0), pos_df.loc[start_idx, ["x", "y"]], color="tab:red")
     circs.set_edgecolor(edgecolors)
     circs.set_alpha(alphas)
 
@@ -424,8 +425,7 @@ def get_orthogonal_paths(
 
 
 def select_end(
-    ax1,
-    ax2,
+    ax,
     pos_df,
     start_idx,
     end_idx,
@@ -459,7 +459,7 @@ def select_end(
     for path_idx in path_idxs[1:]:  # last index includes end_idx
         edgecolors[path_idx] = to_rgba("tab:red")
         alphas[path_idx] = 1
-        ax1.annotate(str(count), pos_df.loc[path_idx, ["x", "y"]], color="tab:red")
+        ax.annotate(str(count), pos_df.loc[path_idx, ["x", "y"]], color="tab:red")
         count += 1
 
     # facecolor for clusters
@@ -513,118 +513,156 @@ def select_end(
         genes=genes,
         clusters=clusters,
     )
-    for gene in genes:
-        ax2.scatter(x=range(len(path_counts)), y=list(path_counts[gene]), label=gene)
-    ax2.set_title("Gene expression along path")
-    ax2.set_ylabel("LogNorm Expression")
-    ax2.set_xlabel("Path Index")
-    ax2.set_xticks(list(range(len(path_counts))))
-    ax2.legend()
+    return path_counts
+    # for gene in genes:
+    #     ax2.scatter(x=range(len(path_counts)), y=list(path_counts[gene]), label=gene)
+    # ax2.set_title("Gene expression along path")
+    # ax2.set_ylabel("LogNorm Expression")
+    # ax2.set_xlabel("Path Index")
+    # ax2.set_xticks(list(range(len(path_counts))))
+    # ax2.legend()
 
 
 def main(args):
-    count_path = os.path.join(args.data_root, "count", args.section, "outs")
-    pos_df, spot_radius = read_spatial_data(count_path=count_path, fullres=args.fullres)
-    print("Loaded spot positions")
-    counts = read_transcription_data(
-        count_path=count_path, pos_df=pos_df, genes=args.genes
-    )
-    print("Loaded transcription counts")
-    embeddings = read_embedding_data(
-        data_root=args.data_root, model=args.model, section=args.section
-    )
-    print("Loaded embeddings")
-    (distances_hex, hex_adj_mx), (
+    print("Loading data for all sections")
+    data = []
+    for section in tqdm(args.sections):
+        count_path = os.path.join(args.data_root, "count", section, "outs")
+        pos_df, spot_radius = read_spatial_data(
+            count_path=count_path, fullres=args.fullres
+        )
+        # print("Loaded spot positions")
+        counts = read_transcription_data(
+            count_path=count_path, pos_df=pos_df, genes=args.genes
+        )
+        # print("Loaded transcription counts")
+        embeddings = read_embedding_data(
+            data_root=args.data_root, model=args.model, section=section
+        )
+        # print("Loaded embeddings")
+        (distances_hex, hex_adj_mx), (
+            distances_embed,
+            embed_adj_mx,
+        ) = compute_distance_matrix(
+            embeddings=embeddings,
+            distance_metric=args.distance_metric,
+            pos_df=pos_df,
+            num_neighbors=args.num_neighbors,
+        )
+        # print("Computed distances")
+        im = read_image(data_root=args.data_root, section=section, fullres=args.fullres)
+        # print("Loaded image")
+        data.append(
+            (
+                pos_df,
+                spot_radius,
+                counts,
+                embeddings,
+                distances_hex,
+                hex_adj_mx,
+                distances_embed,
+                embed_adj_mx,
+                im,
+            )
+        )
+
+    print("Displaying slides for path selection")
+    all_path_counts = []
+    for section, (
+        pos_df,
+        spot_radius,
+        counts,
+        embeddings,
+        distances_hex,
+        hex_adj_mx,
         distances_embed,
         embed_adj_mx,
-    ) = compute_distance_matrix(
-        embeddings=embeddings,
-        distance_metric=args.distance_metric,
-        pos_df=pos_df,
-        num_neighbors=args.num_neighbors,
-    )
-    print("Computed distances")
-    im = read_image(
-        data_root=args.data_root, section=args.section, fullres=args.fullres
-    )
-    print("Loaded image")
+        im,
+    ) in zip(tqdm(args.sections), data):
+        print(f"----- {section} -----")
 
-    def onpick(event):
-        nonlocal start_set, start_idx
-        idx = event.ind[0]
-        if not start_set:
-            start_idx = idx
-            start_set = True
-            select_start(
-                ax1=ax1,
-                pos_df=pos_df,
-                start_idx=start_idx,
-                circs=circs,
-                edgecolors=edgecolors,
-                alphas=alphas,
-            )
-        else:
-            end_idx = idx
-            fig.canvas.mpl_disconnect(cid)
-            clusters = None
-            if args.num_clusters > 1 and not args.fit_all_centroids:
-                clusters = compute_clusters(
-                    embeddings=embeddings,
-                    num_clusters=args.num_clusters,
-                    max_iter=args.max_iter,
-                    tol=args.tol,
+        def onpick(event):
+            nonlocal start_set, start_idx
+            idx = event.ind[0]
+            if not start_set:
+                start_idx = idx
+                start_set = True
+                select_start(
+                    ax=ax,
+                    pos_df=pos_df,
+                    start_idx=start_idx,
+                    circs=circs,
+                    edgecolors=edgecolors,
+                    alphas=alphas,
+                )
+                ax.set_title("Select end spot")
+            else:
+                end_idx = idx
+                fig.canvas.mpl_disconnect(cid)
+                clusters = None
+                if args.num_clusters > 1 and not args.fit_all_centroids:
+                    clusters = compute_clusters(
+                        embeddings=embeddings,
+                        num_clusters=args.num_clusters,
+                        max_iter=args.max_iter,
+                        tol=args.tol,
+                        start_idx=start_idx,
+                        end_idx=end_idx,
+                        fit_all_centroids=False,
+                    )
+                path_counts = select_end(
+                    ax=ax,
+                    pos_df=pos_df,
                     start_idx=start_idx,
                     end_idx=end_idx,
-                    fit_all_centroids=False,
+                    genes=args.genes,
+                    path_alg=args.path_alg,
+                    avg_expression=args.avg_expression,
+                    counts=counts,
+                    distances_hex=distances_hex,
+                    hex_adj_mx=hex_adj_mx,
+                    distances_embed=distances_embed,
+                    embed_adj_mx=embed_adj_mx,
+                    adjacency=args.adjacency,
+                    circs=circs,
+                    facecolors=facecolors,
+                    edgecolors=edgecolors,
+                    alphas=alphas,
+                    embeddings=embeddings,
+                    max_depth=args.max_depth,
+                    clusters=clusters,
+                    cluster_frac=args.cluster_frac,
                 )
-            select_end(
-                ax1=ax1,
-                ax2=ax2,
-                pos_df=pos_df,
-                start_idx=start_idx,
-                end_idx=end_idx,
-                genes=args.genes,
-                path_alg=args.path_alg,
-                avg_expression=args.avg_expression,
-                counts=counts,
-                distances_hex=distances_hex,
-                hex_adj_mx=hex_adj_mx,
-                distances_embed=distances_embed,
-                embed_adj_mx=embed_adj_mx,
-                adjacency=args.adjacency,
-                circs=circs,
-                facecolors=facecolors,
-                edgecolors=edgecolors,
-                alphas=alphas,
+                ax.set_title("Close this window")
+                all_path_counts.append(path_counts)
+
+        start_idx = -1
+        start_set = False
+
+        plt.ion()
+        fig, ax = plt.subplots(figsize=(args.figsize, args.figsize))
+        clusters = None
+        if args.num_clusters > 1 and args.fit_all_centroids:
+            clusters = compute_clusters(
                 embeddings=embeddings,
-                max_depth=args.max_depth,
-                clusters=clusters,
-                cluster_frac=args.cluster_frac,
+                num_clusters=args.num_clusters,
+                max_iter=args.max_iter,
+                tol=args.tol,
+                start_idx=-1,
+                end_idx=-1,
+                fit_all_centroids=True,
             )
-
-    start_idx = -1
-    start_set = False
-
-    plt.ion()
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(args.figsize * 2, args.figsize))
-    clusters = None
-    if args.num_clusters > 1 and args.fit_all_centroids:
-        clusters = compute_clusters(
-            embeddings=embeddings,
-            num_clusters=args.num_clusters,
-            max_iter=args.max_iter,
-            tol=args.tol,
-            start_idx=-1,
-            end_idx=-1,
-            fit_all_centroids=True,
+        circs, facecolors, edgecolors, alphas = show_slide(
+            ax=ax, im=im, pos_df=pos_df, spot_radius=spot_radius, clusters=clusters
         )
-    circs, facecolors, edgecolors, alphas = show_slide(
-        ax1=ax1, im=im, pos_df=pos_df, spot_radius=spot_radius, clusters=clusters
-    )
+        ax.set_title("Select start spot")
+        cid = fig.canvas.mpl_connect("pick_event", onpick)
 
-    cid = fig.canvas.mpl_connect("pick_event", onpick)
-
-    plt.show(block=True)
+        plt.show(block=True)
+        ax.set_title(section)
+        fig.savefig(os.path.join(args.output_dir, section.replace("/", "-") + ".png"))
+        plt.close(fig)
+    breakpoint()
 
 
 # start_idx = 2352
