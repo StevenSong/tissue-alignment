@@ -536,7 +536,7 @@ def select_end(
 
 def main(args):
     all_path_counts = []
-    for section in tqdm(args.sections):
+    for section in args.sections:
         print(f"----- {section} -----")
         count_path = os.path.join(args.data_root, "count", section, "outs")
         pos_df, spot_radius = read_spatial_data(
@@ -655,19 +655,6 @@ def main(args):
 
 # start_idx = 2352
 # end_idx = 727
-# select_start(pos_df=pos_df, start_idx=start_idx)
-# select_end(
-#     pos_df=pos_df,
-#     start_idx=start_idx,
-#     end_idx=end_idx,
-#     genes=args.genes,
-#     path_alg=args.path_alg,
-#     avg_expression=args.avg_expression,
-#     counts=counts,
-#     distances_hex=distances_hex,
-#     distances_embed=distances_embed,
-#     adjacency=args.adjacency,
-# )
 
 if __name__ == "__main__":
     args = parse_args()
