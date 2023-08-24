@@ -207,9 +207,16 @@ def _get_clusters(embeddings, centroids, cluster_frac=1):
 
 
 def compute_clusters(
-    embeddings, num_clusters, max_iter, tol, start_idx, end_idx, fit_all_centroids
+    section,
+    embeddings,
+    num_clusters,
+    max_iter,
+    tol,
+    start_idx,
+    end_idx,
+    fit_all_centroids,
 ):
-    print("Computing clusters")
+    print(f"{section}: Computing clusters")
     if fit_all_centroids:
         skip = 0
         idxs = np.random.choice(len(embeddings), size=num_clusters, replace=False)
@@ -345,6 +352,7 @@ def get_orthogonal_spot(embeddings, adj_mx, curr_idx, next_idx):
 
 
 def get_orthogonal_paths(
+    section,
     adjacency,
     hex_adj_mx,
     embed_adj_mx,
@@ -357,7 +365,7 @@ def get_orthogonal_paths(
     distances_hex,
     distances_embed,
 ):
-    print("Computing orthogonal paths")
+    print(f"{section}: Computing orthogonal paths")
     if adjacency == "hex":
         _adj_mx = hex_adj_mx
         _distances = distances_hex
@@ -445,6 +453,7 @@ def select_end(
     embeddings,
     max_depth,
     cluster_frac,
+    section,
     clusters=None,
 ):
     path_idxs = compute_path_idxs(
@@ -481,6 +490,7 @@ def select_end(
         )
     elif avg_expression == "orthogonal-paths":
         all_path_idxs = get_orthogonal_paths(
+            section=section,
             adjacency=adjacency,
             hex_adj_mx=hex_adj_mx,
             embed_adj_mx=embed_adj_mx,
@@ -513,6 +523,7 @@ def select_end(
         genes=genes,
         clusters=clusters,
     )
+    print(f"{section}: Calculated expression along path")
     return path_counts
     # for gene in genes:
     #     ax2.scatter(x=range(len(path_counts)), y=list(path_counts[gene]), label=gene)
@@ -524,22 +535,22 @@ def select_end(
 
 
 def main(args):
-    print("Loading data for all sections")
-    data = []
+    all_path_counts = []
     for section in tqdm(args.sections):
+        print(f"----- {section} -----")
         count_path = os.path.join(args.data_root, "count", section, "outs")
         pos_df, spot_radius = read_spatial_data(
             count_path=count_path, fullres=args.fullres
         )
-        # print("Loaded spot positions")
+        print(f"{section}: Loaded spot positions")
         counts = read_transcription_data(
             count_path=count_path, pos_df=pos_df, genes=args.genes
         )
-        # print("Loaded transcription counts")
+        print(f"{section}: Loaded transcription counts")
         embeddings = read_embedding_data(
             data_root=args.data_root, model=args.model, section=section
         )
-        # print("Loaded embeddings")
+        print(f"{section}: Loaded embeddings")
         (distances_hex, hex_adj_mx), (
             distances_embed,
             embed_adj_mx,
@@ -549,37 +560,9 @@ def main(args):
             pos_df=pos_df,
             num_neighbors=args.num_neighbors,
         )
-        # print("Computed distances")
+        print(f"{section}: Computed distances")
         im = read_image(data_root=args.data_root, section=section, fullres=args.fullres)
-        # print("Loaded image")
-        data.append(
-            (
-                pos_df,
-                spot_radius,
-                counts,
-                embeddings,
-                distances_hex,
-                hex_adj_mx,
-                distances_embed,
-                embed_adj_mx,
-                im,
-            )
-        )
-
-    print("Displaying slides for path selection")
-    all_path_counts = []
-    for section, (
-        pos_df,
-        spot_radius,
-        counts,
-        embeddings,
-        distances_hex,
-        hex_adj_mx,
-        distances_embed,
-        embed_adj_mx,
-        im,
-    ) in zip(tqdm(args.sections), data):
-        print(f"----- {section} -----")
+        print(f"{section}: Loaded image")
 
         def onpick(event):
             nonlocal start_set, start_idx
@@ -602,6 +585,7 @@ def main(args):
                 clusters = None
                 if args.num_clusters > 1 and not args.fit_all_centroids:
                     clusters = compute_clusters(
+                        section=section,
                         embeddings=embeddings,
                         num_clusters=args.num_clusters,
                         max_iter=args.max_iter,
@@ -632,6 +616,7 @@ def main(args):
                     max_depth=args.max_depth,
                     clusters=clusters,
                     cluster_frac=args.cluster_frac,
+                    section=section,
                 )
                 ax.set_title("Close this window")
                 all_path_counts.append(path_counts)
@@ -644,6 +629,7 @@ def main(args):
         clusters = None
         if args.num_clusters > 1 and args.fit_all_centroids:
             clusters = compute_clusters(
+                section=section,
                 embeddings=embeddings,
                 num_clusters=args.num_clusters,
                 max_iter=args.max_iter,
@@ -662,6 +648,8 @@ def main(args):
         ax.set_title(section)
         fig.savefig(os.path.join(args.output_dir, section.replace("/", "-") + ".png"))
         plt.close(fig)
+        print(f"{section}: Saved figure")
+
     breakpoint()
 
 
