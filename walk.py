@@ -26,7 +26,7 @@ def parse_args():
     parser.add_argument("--adjacency", choices=["hex", "embed"], default="hex")
     parser.add_argument(
         "--avg-expression",
-        choices=["off", "hex", "embed", "path-clusters", "orthogonal-paths"],
+        choices=["off", "hex", "embed", "path-clusters"],
         default="off",
     )
     parser.add_argument("--num-neighbors", type=int, default=6)
@@ -48,23 +48,8 @@ def parse_args():
     parser.add_argument("--genes", nargs="+", default=["EPCAM", "ACTA2"])
     parser.add_argument("--figsize", type=int, default=8)
     parser.add_argument("--output-dir", required=True)
-
-    # k means
-    parser.add_argument(
-        "--num-clusters",
-        type=int,
-        default=1,
-        help="enable kmeans clustering by setting num clusters > 1",
-    )
-    parser.add_argument("--max-iter", type=int, default=1000)
-    parser.add_argument("--tol", type=float, default=1e-4)
-    parser.add_argument("--fit-all-centroids", action="store_true")
-
-    # orthogonal paths
-    parser.add_argument("--max-depth", type=int, default=10)
-
-    # path clusters
     parser.add_argument("--cluster-frac", type=float, default=1)
+    parser.add_argument("--window-size", type=int, default=5)
 
     args = parser.parse_args()
     return args
@@ -169,15 +154,12 @@ def compute_distance_matrix(embeddings, distance_metric, pos_df, num_neighbors):
 
     # hex grid adjacency
     hex_adj_mx = get_hex_grid_adj_matrix(pos_df=pos_df)
-    # distance 0 is treated as unreachable by path alg
-    distances_hex = np.where(hex_adj_mx, distances, 0)
 
     # embedding space adjacency
     embed_adj_mx = get_embedding_adj_matrix(
         distances=distances, num_neighbors=num_neighbors
     )
-    distances_embed = np.where(embed_adj_mx, distances, 0)
-    return (distances_hex, hex_adj_mx), (distances_embed, embed_adj_mx)
+    return distances, hex_adj_mx, embed_adj_mx
 
 
 def _get_clusters(embeddings, centroids, cluster_frac=1):
@@ -206,44 +188,6 @@ def _get_clusters(embeddings, centroids, cluster_frac=1):
     return clusters
 
 
-def compute_clusters(
-    section,
-    embeddings,
-    num_clusters,
-    max_iter,
-    tol,
-    start_idx,
-    end_idx,
-    fit_all_centroids,
-):
-    print(f"{section}: Computing clusters")
-    if fit_all_centroids:
-        skip = 0
-        idxs = np.random.choice(len(embeddings), size=num_clusters, replace=False)
-    else:
-        skip = 2
-        idxs = np.random.choice(
-            [x for x in range(len(embeddings)) if x not in {start_idx, end_idx}],
-            size=num_clusters - skip,
-            replace=False,
-        )
-        idxs = np.concatenate([[start_idx, end_idx], idxs])
-
-    centroids = embeddings[idxs]
-    last_centroids = np.full_like(centroids, 9999)
-    for _ in tqdm(enumerate(range(max_iter))):
-        clusters = _get_clusters(embeddings=embeddings, centroids=centroids)
-
-        # frobenius norm
-        if np.sqrt(np.power(centroids - last_centroids, 2).sum()) < tol:
-            break
-
-        last_centroids = centroids.copy()
-        for i in range(skip, num_clusters):
-            centroids[i] = embeddings[clusters == i].mean(axis=0)
-    return clusters
-
-
 def compute_path_idxs(distances, path_alg, start_idx, end_idx):
     path_lens, predecessors = shortest_path(
         csgraph=distances,
@@ -266,28 +210,17 @@ def get_path_counts(
     avg_expression,
     counts,
     path_idxs,
-    distances_hex,
-    distances_embed,
+    hex_adj_mx,
+    embed_adj_mx,
     genes,
     clusters,
 ):
     if avg_expression == "hex":
-        adj_idxs_fn = lambda i_idx: distances_hex[i_idx[1]].nonzero()[0]
+        adj_idxs_fn = lambda i_idx: hex_adj_mx[i_idx[1]]
     elif avg_expression == "embed":
-        adj_idxs_fn = lambda i_idx: distances_embed[i_idx[1]].nonzero()[0]
+        adj_idxs_fn = lambda i_idx: embed_adj_mx[i_idx[1]]
     elif avg_expression == "path-clusters":
         adj_idxs_fn = lambda i_idx: np.nonzero(clusters == i_idx[0])[0]
-    elif avg_expression == "orthogonal-paths":
-        # path_idxs is list of list of ints
-        x = np.linspace(0, 1, 100)
-        path_counts = {gene: np.zeros(100, dtype=float) for gene in genes}
-        for _path_idxs in path_idxs:
-            xp = np.linspace(0, 1, len(_path_idxs))
-            _path_counts = counts.loc[_path_idxs, genes]
-            for gene in genes:
-                path_counts[gene] += np.interp(x=x, xp=xp, fp=_path_counts[gene])
-        path_counts = pd.DataFrame(path_counts) / len(path_idxs)
-        return path_counts
     else:  # avg_expression == 'off'
         return counts.loc[path_idxs, genes]
 
@@ -312,7 +245,7 @@ def read_image(data_root, section, fullres):
     return im
 
 
-def show_slide(ax, im, pos_df, spot_radius, clusters=None):
+def show_slide(ax, im, pos_df, spot_radius):
     ax.imshow(im)
     circs = PatchCollection(
         [Circle((x, y), spot_radius) for x, y in pos_df[["x", "y"]].to_numpy()],
@@ -321,8 +254,6 @@ def show_slide(ax, im, pos_df, spot_radius, clusters=None):
     n = len(pos_df)
     facecolors = np.asarray([list(to_rgba("lightgray"))] * n)
     edgecolors = np.asarray([list(to_rgba("lightgray"))] * n)
-    if clusters is not None:
-        facecolors = np.asarray([list(to_rgba(COLORS[i])) for i in clusters])
     alphas = np.full(n, 0.4)
     circs.set_facecolor(facecolors)
     circs.set_edgecolor(edgecolors)
@@ -332,104 +263,11 @@ def show_slide(ax, im, pos_df, spot_radius, clusters=None):
 
 
 def select_start(ax, pos_df, start_idx, circs, edgecolors, alphas):
-    edgecolors[start_idx] = to_rgba("tab:red")
+    edgecolors[start_idx] = to_rgba(COLORS[0])
     alphas[start_idx] = 1
-    ax.annotate(str(0), pos_df.loc[start_idx, ["x", "y"]], color="tab:red")
+    ax.annotate(str(0), pos_df.loc[start_idx, ["x", "y"]], color=COLORS[0])
     circs.set_edgecolor(edgecolors)
     circs.set_alpha(alphas)
-
-
-def get_orthogonal_spot(embeddings, adj_mx, curr_idx, next_idx):
-    adj_idxs = adj_mx[curr_idx].copy()
-    adj_idxs[next_idx] = 0
-    adj_diffs = embeddings[adj_idxs] - embeddings[curr_idx]
-    next_diff = embeddings[next_idx] - embeddings[curr_idx]
-    adj_norm = adj_diffs / np.linalg.norm(adj_diffs, axis=1)[:, None]
-    next_norm = next_diff / np.linalg.norm(next_diff)
-    dot_prods = np.abs(adj_norm.dot(next_norm))
-    orthogonal_idx = adj_idxs.nonzero()[0][dot_prods.argmin()]
-    return orthogonal_idx
-
-
-def get_orthogonal_paths(
-    section,
-    adjacency,
-    hex_adj_mx,
-    embed_adj_mx,
-    path_idxs,
-    start_idx,
-    end_idx,
-    max_depth,
-    embeddings,
-    path_alg,
-    distances_hex,
-    distances_embed,
-):
-    print(f"{section}: Computing orthogonal paths")
-    if adjacency == "hex":
-        _adj_mx = hex_adj_mx
-        _distances = distances_hex
-    else:  # adjacency == 'embed'
-        _adj_mx = embed_adj_mx
-        _distances = distances_embed
-
-    # 1. for start/end spots:
-    #    a: get adjacent spot embeddings
-    #    b: get norm of vector from spot to adj spots
-    #    c: get dot product of each vector to vector of path direction
-    #    d: pick most orthogonal vector, define corresponding spot as new start/end spot
-    # 2: get path between new start/end spot
-    # 3: recurse, stop at depth 10
-    all_path_idxs = [path_idxs]
-    stack = [
-        (
-            0,  # recursion depth
-            start_idx,
-            end_idx,
-            path_idxs,
-        )
-    ]
-
-    def loop_gen(stack):
-        while len(stack):
-            yield
-
-    for _ in tqdm(loop_gen(stack)):
-        _depth, _start_idx, _end_idx, _path_idxs = stack.pop()
-        if _depth >= max_depth:
-            continue
-        _new_depth = _depth + 1
-        _new_start_idx = get_orthogonal_spot(
-            embeddings=embeddings,
-            adj_mx=_adj_mx,
-            curr_idx=_start_idx,
-            next_idx=_path_idxs[1],
-        )
-        _new_end_idx = get_orthogonal_spot(
-            embeddings=embeddings,
-            adj_mx=_adj_mx,
-            curr_idx=_end_idx,
-            next_idx=_path_idxs[-2],
-        )
-        # prevent using the same path as the previous path
-        # also prevent next iteration from choosing current spot as orthogonal
-        for mx in [hex_adj_mx, embed_adj_mx, distances_hex, distances_embed]:
-            mx[_start_idx, _new_start_idx] = 0
-            mx[_new_start_idx, _start_idx] = 0
-            mx[_end_idx, _new_end_idx] = 0
-            mx[_new_end_idx, _end_idx] = 0
-            for i, j in zip(_path_idxs[:-1], _path_idxs[1:]):
-                mx[i, j] = 0
-                mx[j, i] = 0
-        _new_path_idxs = compute_path_idxs(
-            distances=_distances,
-            path_alg=path_alg,
-            start_idx=_new_start_idx,
-            end_idx=_new_end_idx,
-        )
-        all_path_idxs.append(_new_path_idxs)
-        stack.append((_new_depth, _new_start_idx, _new_end_idx, _new_path_idxs))
-    return all_path_idxs
 
 
 def select_end(
@@ -441,9 +279,8 @@ def select_end(
     path_alg,
     avg_expression,
     counts,
-    distances_hex,
+    distances,
     hex_adj_mx,
-    distances_embed,
     embed_adj_mx,
     adjacency,
     circs,
@@ -451,30 +288,59 @@ def select_end(
     edgecolors,
     alphas,
     embeddings,
-    max_depth,
     cluster_frac,
     section,
-    clusters=None,
+    window_size,
 ):
+    # 0 is unreachable by algorithm
+    _distances = np.where(
+        hex_adj_mx if adjacency == "hex" else embed_adj_mx,
+        distances,
+        0,
+    )
     path_idxs = compute_path_idxs(
-        distances=(distances_hex if adjacency == "hex" else distances_embed),
+        distances=_distances,
         path_alg=path_alg,
         start_idx=start_idx,
         end_idx=end_idx,
     )
 
+    # get layer crossings
+    win_dists = []
+    for win_start, win_end in zip(
+        path_idxs[: -window_size + 1], path_idxs[window_size - 1 :]
+    ):
+        curr_win_dist = distances[win_start, win_end]
+        win_dists.append(curr_win_dist)
+    win_dists = np.asarray(win_dists)
+    crossings = []
+    win_tol = win_dists.mean() + win_dists.std()
+    win_mid = int(np.ceil(window_size / 2))
+    contiguous = False
+    for i, win_dist in enumerate(win_dists):
+        print(win_dist)
+        if win_dist > win_tol and not contiguous:
+            crossings.append(path_idxs[i + win_mid])
+            contiguous = True
+        else:
+            contiguous = False
+    print(crossings)
+    print(win_tol)
     # edgecolor for path
     count = 1
+    curr_layer = 0
     for path_idx in path_idxs[1:]:  # last index includes end_idx
-        edgecolors[path_idx] = to_rgba("tab:red")
+        if curr_layer < len(crossings) and path_idx == crossings[curr_layer]:
+            curr_layer += 1
+        edgecolors[path_idx] = to_rgba(COLORS[curr_layer])
         alphas[path_idx] = 1
-        ax.annotate(str(count), pos_df.loc[path_idx, ["x", "y"]], color="tab:red")
+        ax.annotate(
+            str(count), pos_df.loc[path_idx, ["x", "y"]], color=COLORS[curr_layer]
+        )
         count += 1
 
     # facecolor for clusters
-    if clusters is not None:
-        facecolors = np.asarray([list(to_rgba(COLORS[i])) for i in clusters])
-    elif avg_expression == "path-clusters":
+    if avg_expression == "path-clusters":
         clusters = _get_clusters(
             embeddings=embeddings,
             centroids=embeddings[path_idxs],
@@ -488,27 +354,6 @@ def select_end(
                 for idx, i in enumerate(clusters)
             ]
         )
-    elif avg_expression == "orthogonal-paths":
-        all_path_idxs = get_orthogonal_paths(
-            section=section,
-            adjacency=adjacency,
-            hex_adj_mx=hex_adj_mx,
-            embed_adj_mx=embed_adj_mx,
-            path_idxs=path_idxs,
-            start_idx=start_idx,
-            end_idx=end_idx,
-            max_depth=max_depth,
-            embeddings=embeddings,
-            path_alg=path_alg,
-            distances_hex=distances_hex,
-            distances_embed=distances_embed,
-        )
-        cmap = colormaps["viridis"]
-        for _path_idxs in all_path_idxs:
-            cmap_interp = np.linspace(0, 1, len(_path_idxs))
-            for i, _idx in enumerate(_path_idxs):
-                facecolors[_idx] = cmap(cmap_interp[i])
-        path_idxs = all_path_idxs
 
     circs.set_facecolor(facecolors)
     circs.set_edgecolor(edgecolors)
@@ -518,8 +363,8 @@ def select_end(
         avg_expression=avg_expression,
         counts=counts,
         path_idxs=path_idxs,
-        distances_hex=distances_hex,
-        distances_embed=distances_embed,
+        hex_adj_mx=hex_adj_mx,
+        embed_adj_mx=embed_adj_mx,
         genes=genes,
         clusters=clusters,
     )
@@ -551,10 +396,7 @@ def main(args):
             data_root=args.data_root, model=args.model, section=section
         )
         print(f"{section}: Loaded embeddings")
-        (distances_hex, hex_adj_mx), (
-            distances_embed,
-            embed_adj_mx,
-        ) = compute_distance_matrix(
+        distances, hex_adj_mx, embed_adj_mx = compute_distance_matrix(
             embeddings=embeddings,
             distance_metric=args.distance_metric,
             pos_df=pos_df,
@@ -582,18 +424,6 @@ def main(args):
             else:
                 end_idx = idx
                 fig.canvas.mpl_disconnect(cid)
-                clusters = None
-                if args.num_clusters > 1 and not args.fit_all_centroids:
-                    clusters = compute_clusters(
-                        section=section,
-                        embeddings=embeddings,
-                        num_clusters=args.num_clusters,
-                        max_iter=args.max_iter,
-                        tol=args.tol,
-                        start_idx=start_idx,
-                        end_idx=end_idx,
-                        fit_all_centroids=False,
-                    )
                 path_counts = select_end(
                     ax=ax,
                     pos_df=pos_df,
@@ -603,9 +433,8 @@ def main(args):
                     path_alg=args.path_alg,
                     avg_expression=args.avg_expression,
                     counts=counts,
-                    distances_hex=distances_hex,
+                    distances=distances,
                     hex_adj_mx=hex_adj_mx,
-                    distances_embed=distances_embed,
                     embed_adj_mx=embed_adj_mx,
                     adjacency=args.adjacency,
                     circs=circs,
@@ -613,12 +442,12 @@ def main(args):
                     edgecolors=edgecolors,
                     alphas=alphas,
                     embeddings=embeddings,
-                    max_depth=args.max_depth,
-                    clusters=clusters,
                     cluster_frac=args.cluster_frac,
                     section=section,
+                    window_size=args.window_size,
                 )
-                ax.set_title("Close this window")
+                ax.set_title(section)
+                print(f"{section}: Close the window")
                 all_path_counts.append(path_counts)
 
         start_idx = -1
@@ -626,26 +455,17 @@ def main(args):
 
         plt.ion()
         fig, ax = plt.subplots(figsize=(args.figsize, args.figsize))
-        clusters = None
-        if args.num_clusters > 1 and args.fit_all_centroids:
-            clusters = compute_clusters(
-                section=section,
-                embeddings=embeddings,
-                num_clusters=args.num_clusters,
-                max_iter=args.max_iter,
-                tol=args.tol,
-                start_idx=-1,
-                end_idx=-1,
-                fit_all_centroids=True,
-            )
         circs, facecolors, edgecolors, alphas = show_slide(
-            ax=ax, im=im, pos_df=pos_df, spot_radius=spot_radius, clusters=clusters
+            ax=ax,
+            im=im,
+            pos_df=pos_df,
+            spot_radius=spot_radius,
         )
         ax.set_title("Select start spot")
         cid = fig.canvas.mpl_connect("pick_event", onpick)
 
         plt.show(block=True)
-        ax.set_title(section)
+
         fig.savefig(os.path.join(args.output_dir, section.replace("/", "-") + ".png"))
         plt.close(fig)
         print(f"{section}: Saved figure")
