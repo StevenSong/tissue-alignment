@@ -1,24 +1,21 @@
 import argparse
 import json
 import os
-from collections import defaultdict
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import torch
+from dtw import dtw, warp
 from matplotlib import colormaps
 from matplotlib.collections import PatchCollection
-from matplotlib.colors import TABLEAU_COLORS, to_rgba
+from matplotlib.colors import to_rgba
 from matplotlib.patches import Circle
 from PIL import Image
 from scipy.io import mmread
 from scipy.sparse.csgraph import shortest_path
 from sklearn.metrics import pairwise_distances
 from sklearn.metrics.pairwise import PAIRWISE_DISTANCE_FUNCTIONS
-from tqdm import tqdm
-
-COLORS = list(TABLEAU_COLORS)
 
 
 def parse_args():
@@ -49,7 +46,6 @@ def parse_args():
     parser.add_argument("--figsize", type=int, default=8)
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--cluster-frac", type=float, default=1)
-    parser.add_argument("--window-size", type=int, default=5)
 
     args = parser.parse_args()
     return args
@@ -263,9 +259,9 @@ def show_slide(ax, im, pos_df, spot_radius):
 
 
 def select_start(ax, pos_df, start_idx, circs, edgecolors, alphas):
-    edgecolors[start_idx] = to_rgba(COLORS[0])
+    edgecolors[start_idx] = to_rgba("tab:red")
     alphas[start_idx] = 1
-    ax.annotate(str(0), pos_df.loc[start_idx, ["x", "y"]], color=COLORS[0])
+    ax.annotate(str(0), pos_df.loc[start_idx, ["x", "y"]], color="tab:red")
     circs.set_edgecolor(edgecolors)
     circs.set_alpha(alphas)
 
@@ -290,7 +286,6 @@ def select_end(
     embeddings,
     cluster_frac,
     section,
-    window_size,
 ):
     # 0 is unreachable by algorithm
     _distances = np.where(
@@ -305,38 +300,12 @@ def select_end(
         end_idx=end_idx,
     )
 
-    # get layer crossings
-    win_dists = []
-    for win_start, win_end in zip(
-        path_idxs[: -window_size + 1], path_idxs[window_size - 1 :]
-    ):
-        curr_win_dist = distances[win_start, win_end]
-        win_dists.append(curr_win_dist)
-    win_dists = np.asarray(win_dists)
-    crossings = []
-    win_tol = win_dists.mean() + win_dists.std()
-    win_mid = int(np.ceil(window_size / 2))
-    contiguous = False
-    for i, win_dist in enumerate(win_dists):
-        print(win_dist)
-        if win_dist > win_tol and not contiguous:
-            crossings.append(path_idxs[i + win_mid])
-            contiguous = True
-        else:
-            contiguous = False
-    print(crossings)
-    print(win_tol)
     # edgecolor for path
     count = 1
-    curr_layer = 0
     for path_idx in path_idxs[1:]:  # last index includes end_idx
-        if curr_layer < len(crossings) and path_idx == crossings[curr_layer]:
-            curr_layer += 1
-        edgecolors[path_idx] = to_rgba(COLORS[curr_layer])
+        edgecolors[path_idx] = to_rgba("tab:red")
         alphas[path_idx] = 1
-        ax.annotate(
-            str(count), pos_df.loc[path_idx, ["x", "y"]], color=COLORS[curr_layer]
-        )
+        ax.annotate(str(count), pos_df.loc[path_idx, ["x", "y"]], color="tab:red")
         count += 1
 
     # facecolor for clusters
@@ -370,13 +339,6 @@ def select_end(
     )
     print(f"{section}: Calculated expression along path")
     return path_counts
-    # for gene in genes:
-    #     ax2.scatter(x=range(len(path_counts)), y=list(path_counts[gene]), label=gene)
-    # ax2.set_title("Gene expression along path")
-    # ax2.set_ylabel("LogNorm Expression")
-    # ax2.set_xlabel("Path Index")
-    # ax2.set_xticks(list(range(len(path_counts))))
-    # ax2.legend()
 
 
 def main(args):
@@ -444,7 +406,6 @@ def main(args):
                     embeddings=embeddings,
                     cluster_frac=args.cluster_frac,
                     section=section,
-                    window_size=args.window_size,
                 )
                 ax.set_title(section)
                 print(f"{section}: Close the window")
@@ -470,11 +431,69 @@ def main(args):
         plt.close(fig)
         print(f"{section}: Saved figure")
 
-    breakpoint()
+    print("----- Path Alignment -----")
 
+    # do path alignment
+    ref_i = np.asarray(len(x) for x in all_path_counts).argmax()
+    ref = all_path_counts[ref_i].to_numpy()
+    aligned_counts = []
+    for i, x in enumerate(all_path_counts):
+        if i == ref_i:
+            aligned_counts.append(ref)
+            continue
+        qry = x.to_numpy()
+        alignment = dtw(qry, ref, open_end=True)
+        qry_aligned = qry[warp(alignment)]
+        qry_aligned_padded = np.pad(
+            qry_aligned,
+            pad_width=((0, len(ref) - len(qry_aligned)), (0, 0)),
+            mode="constant",
+            constant_values=np.nan,
+        )
+        aligned_counts.append(qry_aligned_padded)
+    aligned_counts = np.asarray(aligned_counts)
+    print("Aligned paths")
 
-# start_idx = 2352
-# end_idx = 727
+    # plot all aligned path expressions per gene
+    x = np.arange(len(ref))
+    for g, gene in enumerate(args.genes):
+        fig, ax = plt.subplots(figsize=(args.figsize, args.figsize))
+        for p in range(len(aligned_counts)):
+            exp = aligned_counts[p, :, g]
+            exp = exp[~np.isnan(exp)]
+            tag = " (aligned)"
+            if p == ref_i:
+                tag = " (reference)"
+            ax.plot(exp, label=args.sections[p] + tag)
+        mean_exp = np.nanmean(aligned_counts[:, :, g], axis=0)
+        ax.plot(mean_exp, label="average expression")
+        ax.set_title(f"{gene} expression along aligned path")
+        ax.set_ylabel("LogNorm Expression")
+        ax.set_xlabel("Aligned Path Index")
+        ax.set_xticks(x)
+        ax.legend()
+        fig.savefig(os.path.join(args.output_dir, "aligned-" + gene + ".png"))
+        plt.close(fig)
+        print(f"Saved {gene} expression")
+
+    # plot average expression
+    fig, ax = plt.subplots(figsize=(args.figsize, args.figsize))
+    for g, gene in enumerate(args.genes):
+        mean_exp = np.nanmean(aligned_counts[:, :, g], axis=0)
+        err_exp = np.nanstd(aligned_counts[:, :, g], axis=0)
+        ax.plot(x, mean_exp, label=gene)
+        ax.fill_between(x=x, y1=mean_exp - err_exp, y2=mean_exp + err_exp, alpha=0.25)
+
+    ax.set_title("Average gene expression along aligned path")
+    ax.set_ylabel("LogNorm Expression")
+    ax.set_xlabel("Aligned Path Index")
+    ax.set_xticks(x)
+    ax.legend()
+    fig.savefig(os.path.join(args.output_dir, "avg-expressions.png"))
+    print("Saved average gene expression")
+    plt.show(block=True)
+    print("Close window when done")
+
 
 if __name__ == "__main__":
     args = parse_args()
