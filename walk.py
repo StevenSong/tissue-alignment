@@ -11,15 +11,23 @@ from matplotlib import colormaps
 from matplotlib.collections import PatchCollection
 from matplotlib.colors import to_rgba
 from matplotlib.patches import Circle
+from matplotlib.ticker import MaxNLocator
 from PIL import Image
 from scipy.io import mmread
 from scipy.sparse.csgraph import shortest_path
 from sklearn.metrics import pairwise_distances
 from sklearn.metrics.pairwise import PAIRWISE_DISTANCE_FUNCTIONS
 
+epilog = """\
+Usage tips:
+1) Pick start points in the same tissue layer across slides
+2) Pick start points close to the middle of the edge of the tissue layer
+3) Beware of tissue layer differences
+"""
+
 
 def parse_args():
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(epilog=epilog)
     parser.add_argument("--adjacency", choices=["hex", "embed"], default="hex")
     parser.add_argument(
         "--avg-expression",
@@ -43,6 +51,7 @@ def parse_args():
     )
     parser.add_argument("--fullres", action="store_true")
     parser.add_argument("--genes", nargs="+", default=["EPCAM", "ACTA2"])
+    parser.add_argument("--alignment-genes", nargs="+", default=["EPCAM", "ACTA2"])
     parser.add_argument("--figsize", type=int, default=8)
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--cluster-frac", type=float, default=1)
@@ -427,30 +436,41 @@ def main(args):
 
         plt.show(block=True)
 
-        fig.savefig(os.path.join(args.output_dir, section.replace("/", "-") + ".png"))
+        fig.savefig(
+            os.path.join(
+                args.output_dir, "walked-" + section.replace("/", "-") + ".png"
+            )
+        )
         plt.close(fig)
         print(f"{section}: Saved figure")
+    plt.ioff()
 
     print("----- Path Alignment -----")
 
     # do path alignment
+    assert all(gene in args.genes for gene in args.alignment_genes)
+    alignment_gene_idxs = [
+        i for i, gene in enumerate(args.genes) if gene in args.alignment_genes
+    ]
     ref_i = np.asarray(len(x) for x in all_path_counts).argmax()
-    ref = all_path_counts[ref_i].to_numpy()
+    ref_x = all_path_counts[ref_i].to_numpy()
+    ref = ref_x[:, alignment_gene_idxs]
     aligned_counts = []
     for i, x in enumerate(all_path_counts):
         if i == ref_i:
-            aligned_counts.append(ref)
+            aligned_counts.append(ref_x)
             continue
-        qry = x.to_numpy()
+        x = x.to_numpy()
+        qry = x[:, alignment_gene_idxs]
         alignment = dtw(qry, ref, open_end=True)
-        qry_aligned = qry[warp(alignment)]
-        qry_aligned_padded = np.pad(
-            qry_aligned,
-            pad_width=((0, len(ref) - len(qry_aligned)), (0, 0)),
+        x_aligned = x[warp(alignment)]
+        x_aligned_padded = np.pad(
+            x_aligned,
+            pad_width=((0, len(ref) - len(x_aligned)), (0, 0)),
             mode="constant",
             constant_values=np.nan,
         )
-        aligned_counts.append(qry_aligned_padded)
+        aligned_counts.append(x_aligned_padded)
     aligned_counts = np.asarray(aligned_counts)
     print("Aligned paths")
 
@@ -470,29 +490,50 @@ def main(args):
         ax.set_title(f"{gene} expression along aligned path")
         ax.set_ylabel("LogNorm Expression")
         ax.set_xlabel("Aligned Path Index")
-        ax.set_xticks(x)
-        ax.legend()
+        ax.xaxis.set_major_locator(MaxNLocator(integer=True))
+        box = ax.get_position()
+        ax.set_position([box.x0, box.y0, box.width * 0.8, box.height])
+        ax.legend(loc="center left", bbox_to_anchor=(1, 0.5))
         fig.savefig(os.path.join(args.output_dir, "aligned-" + gene + ".png"))
         plt.close(fig)
         print(f"Saved {gene} expression")
 
     # plot average expression
     fig, ax = plt.subplots(figsize=(args.figsize, args.figsize))
+    lines_other = []
+    genes_other = []
+    lines_align = []
+    genes_align = []
     for g, gene in enumerate(args.genes):
         mean_exp = np.nanmean(aligned_counts[:, :, g], axis=0)
         err_exp = np.nanstd(aligned_counts[:, :, g], axis=0)
-        ax.plot(x, mean_exp, label=gene)
+        (line,) = ax.plot(x, mean_exp)
+        if gene in args.alignment_genes:
+            lines_align.append(line)
+            genes_align.append(gene)
+        else:
+            lines_other.append(line)
+            genes_other.append(gene)
         ax.fill_between(x=x, y1=mean_exp - err_exp, y2=mean_exp + err_exp, alpha=0.25)
+    line_dummy = [ax.plot([0], marker="None", linestyle="None")[0]]
+    gene_dummy = [("---------\n" + "Alignment\n" + "Genes\n" + "---------")]
 
     ax.set_title("Average gene expression along aligned path")
     ax.set_ylabel("LogNorm Expression")
     ax.set_xlabel("Aligned Path Index")
-    ax.set_xticks(x)
-    ax.legend()
-    fig.savefig(os.path.join(args.output_dir, "avg-expressions.png"))
+    ax.xaxis.set_major_locator(MaxNLocator(integer=True))
+    box = ax.get_position()
+    ax.set_position([box.x0, box.y0, box.width * 0.8, box.height])
+    ax.legend(
+        lines_other + line_dummy + lines_align,
+        genes_other + gene_dummy + genes_align,
+        loc="center left",
+        bbox_to_anchor=(1, 0.5),
+    )
+    fig.savefig(os.path.join(args.output_dir, "average-aligned-expressions.png"))
     print("Saved average gene expression")
-    plt.show(block=True)
     print("Close window when done")
+    plt.show(block=True)
 
 
 if __name__ == "__main__":
