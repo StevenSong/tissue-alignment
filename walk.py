@@ -2,9 +2,11 @@ import argparse
 import json
 import os
 
+import h5py
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import scipy.sparse as sp_sparse
 import torch
 from dtw import dtw, warp
 from matplotlib import colormaps
@@ -13,7 +15,6 @@ from matplotlib.colors import to_rgba
 from matplotlib.patches import Circle
 from matplotlib.ticker import MaxNLocator
 from PIL import Image
-from scipy.io import mmread
 from scipy.sparse.csgraph import shortest_path
 from sklearn.metrics import pairwise_distances
 from sklearn.metrics.pairwise import PAIRWISE_DISTANCE_FUNCTIONS
@@ -85,37 +86,37 @@ def read_spatial_data(count_path, fullres):
     return pos_df, spot_radius
 
 
-def read_transcription_data(count_path, pos_df, genes):
-    features = pd.read_csv(
-        os.path.join(count_path, "filtered_feature_bc_matrix/features.tsv.gz"),
-        sep="\t",
-        names=["id", "gene", "type"],
-    )
-    barcodes = pd.read_csv(
-        os.path.join(count_path, "filtered_feature_bc_matrix/barcodes.tsv.gz"),
-        sep="\t",
-        names=["barcode"],
-    )
+def read_transcription_data(count_path, genes):
+    with h5py.File(os.path.join(count_path, "filtered_feature_bc_matrix.h5"), "r") as f:
+        barcodes = f["matrix/barcodes"][:]
+        data = f["matrix/data"][:]
+        indices = f["matrix/indices"][:]
+        indptr = f["matrix/indptr"][:]
+        shape = f["matrix/shape"][:]
+        names = f["matrix/features/name"][:]
+        mat = sp_sparse.csc_matrix((data, indices, indptr), shape=shape)
 
     target = 10_000  # 10_000 counts per spot (or per slide)
-    mat = mmread(os.path.join(count_path, "filtered_feature_bc_matrix/matrix.mtx.gz"))
     t = mat.shape[1]  # number of spots in slide
     z = mat.sum()  # sum of all counts in slide
     # t = t if use_slide_size else 1
     mat = mat * t / z * target  # (z/t) is average count per spot for the slide
     mat = mat.log1p()
 
-    counts = pd.DataFrame.sparse.from_spmatrix(mat).T
-    counts.index = barcodes["barcode"]
-    counts.columns = features["gene"]
+    df = pd.DataFrame.sparse.from_spmatrix(mat).T
+    df.index = pd.Series(barcodes).str.decode("utf-8")
+    df.columns = pd.Series(names).str.decode("utf-8")
+
+    # reindexing is really slow, instead of below, index using barcodes
+    # (see get_path_counts fn)
     # use pos_df ordering of spots
-    counts = counts.loc[pos_df["barcode"]].reset_index()
-    assert counts["barcode"].equals(pos_df["barcode"])
+    # counts = counts.loc[pos_df["barcode"]].reset_index()
+    # assert counts["barcode"].equals(pos_df["barcode"])
 
     for gene in genes:
-        assert gene in counts.columns
+        assert gene in df.columns
 
-    return counts
+    return df
 
 
 def read_embedding_data(data_root, model, section):
@@ -213,6 +214,7 @@ def compute_path_idxs(distances, path_alg, start_idx, end_idx):
 
 def get_path_counts(
     avg_expression,
+    pos_df,
     counts,
     path_idxs,
     hex_adj_mx,
@@ -227,12 +229,14 @@ def get_path_counts(
     elif avg_expression == "path-clusters":
         adj_idxs_fn = lambda i_idx: np.nonzero(clusters == i_idx[0])[0]
     else:  # avg_expression == 'off'
-        return counts.loc[path_idxs, genes]
+        counts_idxs = pos_df.loc[path_idxs, "barcode"]
+        return counts.loc[counts_idxs, genes]
 
     path_counts = {}
     for path_i, path_idx in enumerate(path_idxs):
         adj_idxs = adj_idxs_fn((path_i, path_idx))
-        avg = counts.loc[adj_idxs, genes].mean(axis=0)
+        counts_idxs = pos_df.loc[adj_idxs, "barcode"]
+        avg = counts.loc[counts_idxs, genes].mean(axis=0)
         path_counts[path_idx] = avg
     path_counts = pd.DataFrame(path_counts).T
     return path_counts
@@ -339,6 +343,7 @@ def select_end(
 
     path_counts = get_path_counts(
         avg_expression=avg_expression,
+        pos_df=pos_df,
         counts=counts,
         path_idxs=path_idxs,
         hex_adj_mx=hex_adj_mx,
@@ -359,9 +364,9 @@ def main(args):
             count_path=count_path, fullres=args.fullres
         )
         print(f"{section}: Loaded spot positions")
-        counts = read_transcription_data(
-            count_path=count_path, pos_df=pos_df, genes=args.genes
-        )
+        # be really careful how you index counts,
+        # its ordering is not the same as pos_df
+        counts = read_transcription_data(count_path=count_path, genes=args.genes)
         print(f"{section}: Loaded transcription counts")
         embeddings = read_embedding_data(
             data_root=args.data_root, model=args.model, section=section
