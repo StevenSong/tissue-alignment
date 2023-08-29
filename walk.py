@@ -33,11 +33,12 @@ def parse_args():
     parser.add_argument(
         "--avg-expression",
         choices=["off", "hex", "embed", "path-clusters"],
-        default="off",
+        default="path-clusters",
     )
     parser.add_argument("--num-neighbors", type=int, default=6)
-    parser.add_argument("--data-root", default="/mnt/data5/spatial")
-    parser.add_argument("--sections", default=["slide3/A1"], nargs="+")
+    parser.add_argument("--sections", nargs="+", required=True)
+    parser.add_argument("--data_root", default="/mnt/data5/spatial/data")
+    parser.add_argument("--output-dir", required=True)
     parser.add_argument("--model", default="triplet-all-slides-0999")
     parser.add_argument(
         "--distance-metric",
@@ -54,16 +55,15 @@ def parse_args():
     parser.add_argument("--genes", nargs="+", default=["EPCAM", "ACTA2"])
     parser.add_argument("--alignment-genes", nargs="+", default=["EPCAM", "ACTA2"])
     parser.add_argument("--figsize", type=int, default=8)
-    parser.add_argument("--output-dir", required=True)
     parser.add_argument("--cluster-frac", type=float, default=1)
 
     args = parser.parse_args()
     return args
 
 
-def read_spatial_data(count_path, fullres):
+def read_spatial_data(section_path, fullres):
     pos_df = pd.read_csv(
-        os.path.join(count_path, "spatial/tissue_positions_list.csv"),
+        os.path.join(section_path, "outs/spatial/tissue_positions_list.csv"),
         header=None,
         names=[
             "barcode",
@@ -76,7 +76,7 @@ def read_spatial_data(count_path, fullres):
     )
     pos_df = pos_df.loc[pos_df["in_tissue"] == 1].reset_index(drop=True)
     pos_df[["y", "x"]] = pos_df[["y_fullres", "x_fullres"]].copy()
-    with open(os.path.join(count_path, "spatial/scalefactors_json.json")) as f:
+    with open(os.path.join(section_path, "outs/spatial/scalefactors_json.json")) as f:
         scale_factors = json.loads(f.read())
     spot_radius = int(round(scale_factors["spot_diameter_fullres"] / 2))
     if not fullres:
@@ -86,8 +86,10 @@ def read_spatial_data(count_path, fullres):
     return pos_df, spot_radius
 
 
-def read_transcription_data(count_path, genes):
-    with h5py.File(os.path.join(count_path, "filtered_feature_bc_matrix.h5"), "r") as f:
+def read_transcription_data(section_path, genes):
+    with h5py.File(
+        os.path.join(section_path, "outs/filtered_feature_bc_matrix.h5"), "r"
+    ) as f:
         barcodes = f["matrix/barcodes"][:]
         data = f["matrix/data"][:]
         indices = f["matrix/indices"][:]
@@ -119,10 +121,8 @@ def read_transcription_data(count_path, genes):
     return df
 
 
-def read_embedding_data(data_root, model, section):
-    return torch.load(os.path.join(data_root, f"embeddings/{model}/embeddings.pt"))[
-        section
-    ].numpy()
+def read_embedding_data(section_path, model):
+    return torch.load(os.path.join(section_path, f"embeddings/{model}.pt")).numpy()
 
 
 def get_hex_grid_adj_matrix(pos_df):
@@ -242,14 +242,13 @@ def get_path_counts(
     return path_counts
 
 
-def read_image(data_root, section, fullres):
+def read_image(section_path, fullres):
     if fullres:
-        im = Image.open(os.path.join(data_root, "data", section, f"{section[-2:]}.tif"))
+        slide = os.path.basename(section_path.rstrip("/"))
+        im = Image.open(os.path.join(section_path, f"{slide}.tif"))
     else:
         im = Image.open(
-            os.path.join(
-                data_root, "count", section, "outs/spatial/tissue_hires_image.png"
-            )
+            os.path.join(section_path, "outs/spatial/tissue_hires_image.png")
         )
     return im
 
@@ -359,18 +358,16 @@ def main(args):
     all_path_counts = []
     for section in args.sections:
         print(f"----- {section} -----")
-        count_path = os.path.join(args.data_root, "count", section, "outs")
+        section_path = os.path.join(args.data_root, section)
         pos_df, spot_radius = read_spatial_data(
-            count_path=count_path, fullres=args.fullres
+            section_path=section_path, fullres=args.fullres
         )
         print(f"{section}: Loaded spot positions")
         # be really careful how you index counts,
         # its ordering is not the same as pos_df
-        counts = read_transcription_data(count_path=count_path, genes=args.genes)
+        counts = read_transcription_data(section_path=section_path, genes=args.genes)
         print(f"{section}: Loaded transcription counts")
-        embeddings = read_embedding_data(
-            data_root=args.data_root, model=args.model, section=section
-        )
+        embeddings = read_embedding_data(section_path=section_path, model=args.model)
         print(f"{section}: Loaded embeddings")
         distances, hex_adj_mx, embed_adj_mx = compute_distance_matrix(
             embeddings=embeddings,
@@ -379,7 +376,7 @@ def main(args):
             num_neighbors=args.num_neighbors,
         )
         print(f"{section}: Computed distances")
-        im = read_image(data_root=args.data_root, section=section, fullres=args.fullres)
+        im = read_image(section_path=section_path, fullres=args.fullres)
         print(f"{section}: Loaded image")
 
         def onpick(event):

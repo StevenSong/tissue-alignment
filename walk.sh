@@ -4,8 +4,8 @@ python walk.py \
 --genes CD3D PTPRC EPCAM ACTA2 \
 --alignment-genes EPCAM ACTA2 \
 --sections \
-  slide3/A1 \
-  slide3/C1 \
-  slide4/A1 \
-  slide4/B1 \
+    colon/CD/A \
+    colon/CD/B \
+    colon/CD/C \
+    colon/CD/D \
 --output-dir ~/figs/CD
