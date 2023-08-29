@@ -38,7 +38,7 @@ def parse_args():
     parser.add_argument("--num-neighbors", type=int, default=6)
     parser.add_argument("--data-root", default="/mnt/data5/spatial")
     parser.add_argument("--sections", default=["slide3/A1"], nargs="+")
-    parser.add_argument("--model", default="triplet-old-all-slides-0999")
+    parser.add_argument("--model", default="triplet-all-slides-0999")
     parser.add_argument(
         "--distance-metric",
         choices=sorted(list(PAIRWISE_DISTANCE_FUNCTIONS.keys())),
