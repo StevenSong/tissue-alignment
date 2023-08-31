@@ -1,8 +1,9 @@
 #!/bin/bash
 
 python src/train.py \
---output_dir /mnt/data5/spatial/runs/simsiam-all-slides \
+--output_dir /mnt/data5/spatial/runs/simsiam-gi \
 --checkpoint_interval 100 \
+--num_epochs 1000 \
 --data_paths \
     /mnt/data5/spatial/data/colon/CD/A/tiles \
     /mnt/data5/spatial/data/colon/CD/B/tiles \
@@ -29,7 +30,6 @@ python src/train.py \
     output_dim=2048 \
 --batch_size 256 \
 --lr 0.05 \
---num_epochs 1000 \
 --optimizer sgd \
 --optimizer_params \
     momentum=0.9 \

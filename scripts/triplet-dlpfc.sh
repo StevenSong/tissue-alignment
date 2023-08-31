@@ -3,6 +3,7 @@
 python src/train.py \
 --output_dir /mnt/data5/spatial/runs/triplet-dlpfc \
 --checkpoint_interval 100 \
+--num_epochs 1000 \
 --data_paths \
     /mnt/data5/spatial/data/dlpfc/donor1/151507/tiles \
     /mnt/data5/spatial/data/dlpfc/donor1/151508/tiles \
@@ -18,6 +19,7 @@ python src/train.py \
     /mnt/data5/spatial/data/dlpfc/donor3/151676/tiles \
 --loader pathology/adj-tile-triplet \
 --loader_params \
+    augment=1 \
     position_table=/mnt/data5/spatial/data/dlpfc/donor1/151507/outs/spatial/tissue_positions_list.csv \
     position_table=/mnt/data5/spatial/data/dlpfc/donor1/151508/outs/spatial/tissue_positions_list.csv \
     position_table=/mnt/data5/spatial/data/dlpfc/donor1/151509/outs/spatial/tissue_positions_list.csv \
@@ -37,7 +39,6 @@ python src/train.py \
     output_dim=2048 \
 --batch_size 192 \
 --lr 0.05 \
---num_epochs 1000 \
 --optimizer sgd \
 --optimizer_params \
     momentum=0.9 \

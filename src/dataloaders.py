@@ -258,7 +258,7 @@ def __get_adj_tile_triplet_transform(
     if augment:
         xform = T.Compose(
             [
-                T.RandomResizedCrop(size, scale=(0.2, 1.0)),
+                T.RandomResizedCrop(size, scale=(0.2, 1.0), antialias=True),
                 T.RandomHorizontalFlip(),
                 T.RandomVerticalFlip(),
                 T.RandomApply([T.ColorJitter(0.4, 0.4, 0.4, 0.4)], p=0.8),
