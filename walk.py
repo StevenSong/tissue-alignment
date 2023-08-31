@@ -12,6 +12,7 @@ from dtw import dtw, warp
 from matplotlib import colormaps
 from matplotlib.collections import PatchCollection
 from matplotlib.colors import to_rgba
+from matplotlib.gridspec import GridSpec
 from matplotlib.patches import Circle
 from matplotlib.ticker import MaxNLocator
 from PIL import Image
@@ -279,25 +280,19 @@ def select_start(ax, pos_df, start_idx, circs, edgecolors, alphas):
 
 
 def select_end(
-    ax,
-    pos_df,
     start_idx,
     end_idx,
-    genes,
     path_alg,
-    avg_expression,
-    counts,
+    adjacency,
     distances,
     hex_adj_mx,
     embed_adj_mx,
-    adjacency,
+    pos_df,
+    ax,
     circs,
-    facecolors,
-    edgecolors,
     alphas,
-    embeddings,
-    cluster_frac,
-    section,
+    edgecolors,
+    facecolors,
 ):
     # 0 is unreachable by algorithm
     _distances = np.where(
@@ -320,132 +315,208 @@ def select_end(
         ax.annotate(str(count), pos_df.loc[path_idx, ["x", "y"]], color="tab:red")
         count += 1
 
-    # facecolor for clusters
-    if avg_expression == "path-clusters":
+    cmap = colormaps["gist_rainbow"]
+    cmap_interp = np.linspace(0, 1, len(path_idxs))
+    for cluster, path_idx in enumerate(path_idxs):
+        facecolors[path_idx] = cmap(cmap_interp[cluster])
+
+    circs.set_edgecolor(edgecolors)
+    circs.set_facecolor(facecolors)
+    circs.set_alpha(alphas)
+
+    return path_idxs
+
+
+def main(args):
+    print(f"----- Section Selection -----")
+    base_section = None
+
+    def pick_section(event):
+        for ax, section in zip(axs, args.sections):
+            if event.artist == ax:
+                nonlocal base_section
+                base_section = section
+                fig.canvas.mpl_disconnect(cid)
+                break
+
+    fig = plt.figure(figsize=(args.figsize, args.figsize))
+    n = int(np.ceil(np.sqrt(len(args.sections))))
+    gs = GridSpec(n, n, figure=fig)
+    axs = []
+    for i, section in enumerate(args.sections):
+        ax = fig.add_subplot(gs[i // n, i % n])
+        ax.tick_params(bottom=False, left=False, labelbottom=False, labelleft=False)
+        section_path = os.path.join(args.data_root, section)
+        im = read_image(section_path=section_path, fullres=False)
+        ax.imshow(im)
+        ax.set_title(section)
+        ax.set_picker(True)
+        axs.append(ax)
+    fig.suptitle("Select section to use as base path")
+    cid = fig.canvas.mpl_connect("pick_event", pick_section)
+    plt.show(block=False)
+    while base_section is None:
+        plt.pause(0.5)
+    plt.close(fig)
+    print(f"Selected {base_section} as base section")
+
+    print(f"----- Base Section -----")
+    base_section_path = os.path.join(args.data_root, base_section)
+    base_pos_df, base_spot_radius = read_spatial_data(
+        section_path=base_section_path, fullres=args.fullres
+    )
+    print(f"{base_section}: Loaded spot positions")
+    base_embeddings = read_embedding_data(
+        section_path=base_section_path, model=args.model
+    )
+    print(f"{base_section}: Loaded embeddings")
+    base_distances, base_hex_adj_mx, base_embed_adj_mx = compute_distance_matrix(
+        embeddings=base_embeddings,
+        distance_metric=args.distance_metric,
+        pos_df=base_pos_df,
+        num_neighbors=args.num_neighbors,
+    )
+    print(f"{base_section}: Computed distances")
+    base_im = read_image(section_path=base_section_path, fullres=args.fullres)
+    print(f"{base_section}: Loaded image")
+
+    start_idx = None
+    end_idx = None
+    path_idxs = None
+
+    def pick_spot(event):
+        nonlocal start_idx, end_idx, path_idxs
+        idx = event.ind[0]
+        if start_idx is None:
+            start_idx = idx
+            select_start(
+                ax=ax,
+                pos_df=base_pos_df,
+                start_idx=start_idx,
+                circs=base_circs,
+                edgecolors=base_edgecolors,
+                alphas=base_alphas,
+            )
+            ax.set_title("Select end spot")
+        else:
+            end_idx = idx
+            fig.canvas.mpl_disconnect(cid)
+            path_idxs = select_end(
+                start_idx=start_idx,
+                end_idx=end_idx,
+                path_alg=args.path_alg,
+                adjacency=args.adjacency,
+                distances=base_distances,
+                hex_adj_mx=base_hex_adj_mx,
+                embed_adj_mx=base_embed_adj_mx,
+                pos_df=base_pos_df,
+                ax=ax,
+                circs=base_circs,
+                alphas=base_alphas,
+                edgecolors=base_edgecolors,
+                facecolors=base_facecolors,
+            )
+            ax.set_title(base_section)
+
+    fig, ax = plt.subplots(figsize=(args.figsize, args.figsize))
+    base_circs, base_facecolors, base_edgecolors, base_alphas = show_slide(
+        ax=ax,
+        im=base_im,
+        pos_df=base_pos_df,
+        spot_radius=base_spot_radius,
+    )
+    ax.set_title("Select start spot")
+    cid = fig.canvas.mpl_connect("pick_event", pick_spot)
+
+    plt.show(block=False)
+    while end_idx is None:
+        plt.pause(0.5)
+    plt.pause(5)
+    fig.savefig(
+        os.path.join(
+            args.output_dir, "walked-" + base_section.replace("/", "-") + ".png"
+        )
+    )
+    plt.close(fig)
+    print(f"{base_section}: Saved figure")
+
+    print(f"----- Other Sections -----")
+    fig = plt.figure(figsize=(args.figsize, args.figsize))
+    n = int(np.ceil(np.sqrt(len(args.sections))))
+    gs = GridSpec(n, n, figure=fig)
+    axs = []
+    for i, section in enumerate(args.sections):
+        section_path = os.path.join(args.data_root, section)
+        ax = fig.add_subplot(gs[i // n, i % n])
+        ax.tick_params(bottom=False, left=False, labelbottom=False, labelleft=False)
+        if section == base_section:
+            embeddings = base_embeddings
+            circs, facecolors, _, _ = show_slide(
+                ax=ax,
+                im=base_im,
+                pos_df=base_pos_df,
+                spot_radius=base_spot_radius,
+            )
+            circs.set_edgecolors(base_edgecolors)
+            circs.set_alpha(base_alphas)
+        else:
+            pos_df, spot_radius = read_spatial_data(
+                section_path=section_path, fullres=args.fullres
+            )
+            print(f"{section}: Loaded spot positions")
+            embeddings = read_embedding_data(
+                section_path=section_path, model=args.model
+            )
+            print(f"{section}: Loaded embeddings")
+            im = read_image(section_path=section_path, fullres=args.fullres)
+            print(f"{section}: Loaded image")
+            circs, facecolors, _, _ = show_slide(
+                ax=ax,
+                im=im,
+                pos_df=pos_df,
+                spot_radius=spot_radius,
+            )
+        ax.set_title(section)
+
+        # be really careful how you index counts,
+        # its ordering is not the same as pos_df
+        counts = read_transcription_data(section_path=section_path, genes=args.genes)
+        print(f"{section}: Loaded transcription counts")
+        axs.append(ax)
+
+        # facecolor for clusters
         clusters = _get_clusters(
             embeddings=embeddings,
-            centroids=embeddings[path_idxs],
-            cluster_frac=cluster_frac,
+            centroids=base_embeddings[path_idxs],
+            cluster_frac=args.cluster_frac,
         )
         cmap = colormaps["gist_rainbow"]
         cmap_interp = np.linspace(0, 1, len(path_idxs))
         facecolors = np.asarray(
             [
-                list(cmap(cmap_interp[i])) if i != -1 else facecolors[idx]
-                for idx, i in enumerate(clusters)
+                list(cmap(cmap_interp[cluster])) if cluster != -1 else facecolors[idx]
+                for idx, cluster in enumerate(clusters)
             ]
         )
+        circs.set_facecolor(facecolors)
 
-    circs.set_facecolor(facecolors)
-    circs.set_edgecolor(edgecolors)
-    circs.set_alpha(alphas)
+        # path_counts = get_path_counts(
+        #     avg_expression=avg_expression,
+        #     pos_df=pos_df,
+        #     counts=counts,
+        #     path_idxs=path_idxs,
+        #     hex_adj_mx=hex_adj_mx,
+        #     embed_adj_mx=embed_adj_mx,
+        #     genes=genes,
+        #     clusters=clusters,
+        # )
+        # print(f"{section}: Calculated expression along path")
 
-    path_counts = get_path_counts(
-        avg_expression=avg_expression,
-        pos_df=pos_df,
-        counts=counts,
-        path_idxs=path_idxs,
-        hex_adj_mx=hex_adj_mx,
-        embed_adj_mx=embed_adj_mx,
-        genes=genes,
-        clusters=clusters,
-    )
-    print(f"{section}: Calculated expression along path")
-    return path_counts
-
-
-def main(args):
-    all_path_counts = []
-    for section in args.sections:
-        print(f"----- {section} -----")
-        section_path = os.path.join(args.data_root, section)
-        pos_df, spot_radius = read_spatial_data(
-            section_path=section_path, fullres=args.fullres
-        )
-        print(f"{section}: Loaded spot positions")
-        # be really careful how you index counts,
-        # its ordering is not the same as pos_df
-        counts = read_transcription_data(section_path=section_path, genes=args.genes)
-        print(f"{section}: Loaded transcription counts")
-        embeddings = read_embedding_data(section_path=section_path, model=args.model)
-        print(f"{section}: Loaded embeddings")
-        distances, hex_adj_mx, embed_adj_mx = compute_distance_matrix(
-            embeddings=embeddings,
-            distance_metric=args.distance_metric,
-            pos_df=pos_df,
-            num_neighbors=args.num_neighbors,
-        )
-        print(f"{section}: Computed distances")
-        im = read_image(section_path=section_path, fullres=args.fullres)
-        print(f"{section}: Loaded image")
-
-        def onpick(event):
-            nonlocal start_set, start_idx
-            idx = event.ind[0]
-            if not start_set:
-                start_idx = idx
-                start_set = True
-                select_start(
-                    ax=ax,
-                    pos_df=pos_df,
-                    start_idx=start_idx,
-                    circs=circs,
-                    edgecolors=edgecolors,
-                    alphas=alphas,
-                )
-                ax.set_title("Select end spot")
-            else:
-                end_idx = idx
-                fig.canvas.mpl_disconnect(cid)
-                path_counts = select_end(
-                    ax=ax,
-                    pos_df=pos_df,
-                    start_idx=start_idx,
-                    end_idx=end_idx,
-                    genes=args.genes,
-                    path_alg=args.path_alg,
-                    avg_expression=args.avg_expression,
-                    counts=counts,
-                    distances=distances,
-                    hex_adj_mx=hex_adj_mx,
-                    embed_adj_mx=embed_adj_mx,
-                    adjacency=args.adjacency,
-                    circs=circs,
-                    facecolors=facecolors,
-                    edgecolors=edgecolors,
-                    alphas=alphas,
-                    embeddings=embeddings,
-                    cluster_frac=args.cluster_frac,
-                    section=section,
-                )
-                ax.set_title(section)
-                print(f"{section}: Close the window")
-                all_path_counts.append(path_counts)
-
-        start_idx = -1
-        start_set = False
-
-        plt.ion()
-        fig, ax = plt.subplots(figsize=(args.figsize, args.figsize))
-        circs, facecolors, edgecolors, alphas = show_slide(
-            ax=ax,
-            im=im,
-            pos_df=pos_df,
-            spot_radius=spot_radius,
-        )
-        ax.set_title("Select start spot")
-        cid = fig.canvas.mpl_connect("pick_event", onpick)
-
-        plt.show(block=True)
-
-        fig.savefig(
-            os.path.join(
-                args.output_dir, "walked-" + section.replace("/", "-") + ".png"
-            )
-        )
-        plt.close(fig)
-        print(f"{section}: Saved figure")
-    plt.ioff()
+    fig.tight_layout()
+    plt.show(block=True)
+    fig.savefig(os.path.join(args.output_dir, "all-slides.png"))
+    plt.close(fig)
+    return
 
     print("----- Path Alignment -----")
 

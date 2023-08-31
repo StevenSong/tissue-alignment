@@ -98,7 +98,7 @@ class TileDataset(Dataset):
             for i in tqdm(
                 range(len(self)), desc=f"Computing {self.name.title()} Dataset Norm"
             ):
-                tile = self[i].to(float)
+                tile = self.get_raw_tile(i).to(float)
                 means.append(tile.mean(axis=(1, 2)))
                 stds.append(tile.std(axis=(1, 2)))
             self.__mean = np.asarray(means).mean(axis=0)
@@ -238,22 +238,38 @@ def __hex_grid_adjacency_matrix(
     assert adj_spots.sum(axis=0).max() <= 6
 
     # non-adj spots must also come from same slide
-    # non_adj_spots = ~adj_spots & slide_spots
+    non_adj_spots = ~adj_spots & slide_spots
 
     # non-adj spots from any slide in corpus
-    non_adj_spots = ~adj_spots
+    # non_adj_spots = ~adj_spots
 
     return adj_spots, non_adj_spots, pos_df
 
 
 def __get_adj_tile_triplet_transform(
     *,  # enforce kwargs
+    size: int,
     adj_spots: np.ndarray,
     non_adj_spots: np.ndarray,
     mean: Tuple[float, float, float],
     std: Tuple[float, float, float],
+    augment: bool,
 ) -> TRANSFORM_FN:
-    norm = T.Normalize(mean=mean, std=std)
+    if augment:
+        xform = T.Compose(
+            [
+                T.RandomResizedCrop(size, scale=(0.2, 1.0)),
+                T.RandomHorizontalFlip(),
+                T.RandomVerticalFlip(),
+                T.RandomApply([T.ColorJitter(0.4, 0.4, 0.4, 0.4)], p=0.8),
+                T.RandomGrayscale(p=0.2),
+                T.RandomApply([T.GaussianBlur(5, sigma=(0.1, 2.0))], p=0.5),
+                T.RandomSolarize(0.5, p=0.2),
+                T.Normalize(mean=mean, std=std),
+            ]
+        )
+    else:
+        xform = T.Normalize(mean=mean, std=std)
 
     def transform(
         *,  # enforce kwargs
@@ -273,9 +289,9 @@ def __get_adj_tile_triplet_transform(
         pos = ds.get_raw_tile(pos_idx)
         neg = ds.get_raw_tile(neg_idx)
         return {
-            "x": norm(x),
-            "pos": norm(pos),
-            "neg": norm(neg),
+            "x": xform(x),
+            "pos": xform(pos),
+            "neg": xform(neg),
         }
 
     return transform
@@ -291,6 +307,8 @@ def get_pathology_adj_tile_triplet_loaders(
     num_workers: int,
 ) -> Tuple[DATALOADER_T, Optional[DATALOADER_T]]:
     assert "position_table" in loader_params
+    if not isinstance(loader_params["position_table"], list):
+        loader_params["position_table"] = [loader_params["position_table"]]
     assert len(loader_params["position_table"]) == len(data_paths)
     print("Computing Hex Grid Adjacency Matrix")
     adj_spots, non_adj_spots, pos_df = __hex_grid_adjacency_matrix(
@@ -303,12 +321,16 @@ def get_pathology_adj_tile_triplet_loaders(
     )
     assert len(train_ds.tile_paths) == len(pos_df)
     train_ds.tile_paths = pos_df["tile_path"].to_list()
+    size = train_ds.get_tile_size()
     mean, std = train_ds.get_mean_std()
+    augment = bool(loader_params["augment"]) if "augment" in loader_params else False
     transform = __get_adj_tile_triplet_transform(
+        size=size,
         adj_spots=adj_spots,
         non_adj_spots=non_adj_spots,
         mean=mean,
         std=std,
+        augment=augment,
     )
     train_ds.transform = transform
     train_dl = DataLoader(
@@ -328,10 +350,12 @@ def get_pathology_adj_tile_triplet_loaders(
             data_paths=eval_data_paths,
         )
         eval_transform = __get_adj_tile_triplet_transform(
+            size=size,
             adj_spots=eval_adj_spots,
             non_adj_spots=eval_non_adj_spots,
             mean=mean,
             std=std,
+            augment=False,
         )
         eval_ds = TileDataset(
             name="eval",
