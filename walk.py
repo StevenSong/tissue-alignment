@@ -12,6 +12,7 @@ from dtw import dtw, warp
 from matplotlib import colormaps
 from matplotlib.collections import PatchCollection
 from matplotlib.colors import to_rgba
+from matplotlib.gridspec import GridSpec
 from matplotlib.patches import Circle
 from matplotlib.ticker import MaxNLocator
 from PIL import Image
@@ -55,7 +56,7 @@ def parse_args():
     parser.add_argument("--genes", nargs="+", default=["EPCAM", "ACTA2"])
     parser.add_argument("--alignment-genes", nargs="+", default=["EPCAM", "ACTA2"])
     parser.add_argument("--figsize", type=int, default=8)
-    parser.add_argument("--cluster-frac", type=float, default=1)
+    parser.add_argument("--spot-frac", type=float, default=1)
 
     args = parser.parse_args()
     return args
@@ -168,8 +169,8 @@ def compute_distance_matrix(embeddings, distance_metric, pos_df, num_neighbors):
     return distances, hex_adj_mx, embed_adj_mx
 
 
-def _get_clusters(embeddings, centroids, cluster_frac=1):
-    assert cluster_frac >= 0 and cluster_frac <= 1
+def _get_clusters(embeddings, centroids, spot_frac=1):
+    assert spot_frac >= 0 and spot_frac <= 1
     n = len(embeddings)
     k = len(centroids)
 
@@ -178,19 +179,10 @@ def _get_clusters(embeddings, centroids, cluster_frac=1):
         axis=-1,
     )  # euclidean distance
     clusters = distances.argmin(axis=0)
-
-    if cluster_frac != 1:
-        for i in range(k):
-            cluster_idxs = (clusters == i).nonzero()[0]
-            cluster_n = len(cluster_idxs)
-            cluster_end = max(1, int(cluster_n * cluster_frac))
-            cluster_idxs_rank = distances[
-                i, cluster_idxs
-            ].argsort()  # get sorted order of cluster idxs
-            cluster_idxs = cluster_idxs[
-                cluster_idxs_rank
-            ]  # get sorted order of global idxs
-            clusters[cluster_idxs[cluster_end:]] = -1  # set outliers to no cluster
+    if spot_frac != 1:
+        spot_n = max(k, int(spot_frac * n))
+        dist_to_cluster = distances[clusters, range(len(clusters))]
+        clusters[dist_to_cluster.argsort()[spot_n:]] = -1
     return clusters
 
 
@@ -296,7 +288,7 @@ def select_end(
     edgecolors,
     alphas,
     embeddings,
-    cluster_frac,
+    spot_frac,
     section,
 ):
     # 0 is unreachable by algorithm
@@ -325,7 +317,7 @@ def select_end(
         clusters = _get_clusters(
             embeddings=embeddings,
             centroids=embeddings[path_idxs],
-            cluster_frac=cluster_frac,
+            spot_frac=spot_frac,
         )
         cmap = colormaps["gist_rainbow"]
         cmap_interp = np.linspace(0, 1, len(path_idxs))
@@ -355,6 +347,38 @@ def select_end(
 
 
 def main(args):
+    print(f"----- Section Selection -----")
+    base_section = None
+
+    def pick_section(event):
+        for ax, section in zip(axs, args.sections):
+            if event.artist == ax:
+                nonlocal base_section
+                base_section = section
+                fig.canvas.mpl_disconnect(cid)
+                break
+
+    fig = plt.figure(figsize=(args.figsize, args.figsize))
+    n = int(np.ceil(np.sqrt(len(args.sections))))
+    gs = GridSpec(n, n, figure=fig)
+    axs = []
+    for i, section in enumerate(args.sections):
+        ax = fig.add_subplot(gs[i // n, i % n])
+        ax.tick_params(bottom=False, left=False, labelbottom=False, labelleft=False)
+        section_path = os.path.join(args.data_root, section)
+        im = read_image(section_path=section_path, fullres=False)
+        ax.imshow(im)
+        ax.set_title(section)
+        ax.set_picker(True)
+        axs.append(ax)
+    fig.suptitle("Select section to use as base path")
+    cid = fig.canvas.mpl_connect("pick_event", pick_section)
+    plt.show(block=False)
+    while base_section is None:
+        plt.pause(0.5)
+    plt.close(fig)
+    print(f"Selected {base_section} as base section")
+
     all_path_counts = []
     for section in args.sections:
         print(f"----- {section} -----")
@@ -415,7 +439,7 @@ def main(args):
                     edgecolors=edgecolors,
                     alphas=alphas,
                     embeddings=embeddings,
-                    cluster_frac=args.cluster_frac,
+                    spot_frac=args.spot_frac,
                     section=section,
                 )
                 ax.set_title(section)
@@ -454,7 +478,8 @@ def main(args):
     alignment_gene_idxs = [
         i for i, gene in enumerate(args.genes) if gene in args.alignment_genes
     ]
-    ref_i = np.asarray(len(x) for x in all_path_counts).argmax()
+    temp = [section == base_section for section in args.sections]
+    ref_i = np.asarray(temp).argmax()
     ref_x = all_path_counts[ref_i].to_numpy()
     ref = ref_x[:, alignment_gene_idxs]
     aligned_counts = []
