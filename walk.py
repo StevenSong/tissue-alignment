@@ -40,7 +40,7 @@ def parse_args():
     parser.add_argument("--sections", nargs="+", required=True)
     parser.add_argument("--data_root", default="/mnt/data5/spatial/data")
     parser.add_argument("--output-dir", required=True)
-    parser.add_argument("--model", default="triplet-all-slides-0999")
+    parser.add_argument("--model", default="triplet-gi-0999")
     parser.add_argument(
         "--distance-metric",
         choices=sorted(list(PAIRWISE_DISTANCE_FUNCTIONS.keys())),
