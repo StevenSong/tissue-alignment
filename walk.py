@@ -471,6 +471,23 @@ def main(args):
         print(f"{section}: Saved figure")
     plt.ioff()
 
+    for section, path_counts in zip(args.sections, all_path_counts):
+        fig, ax = plt.subplots(figsize=(args.figsize, args.figsize))
+        for gene in args.genes:
+            ax.scatter(
+                np.arange(len(path_counts)), path_counts[gene].to_numpy(), label=gene
+            )
+        ax.set_title(section)
+        ax.set_ylabel("LogNorm Expression")
+        ax.set_xlabel("Path Index")
+        ax.legend()
+        fig.savefig(
+            os.path.join(
+                args.output_dir, "expression-" + section.replace("/", "-") + ".png"
+            )
+        )
+        plt.close(fig)
+
     print("----- Path Alignment -----")
 
     # do path alignment
