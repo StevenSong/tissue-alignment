@@ -4,7 +4,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torchvision.models import get_model
-
 from utils import PARAMS
 
 MODEL_T = Callable[

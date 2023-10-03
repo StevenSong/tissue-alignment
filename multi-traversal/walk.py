@@ -38,6 +38,8 @@ def parse_args():
     )
     parser.add_argument("--num-neighbors", type=int, default=6)
     parser.add_argument("--sections", nargs="+", required=True)
+    parser.add_argument("--start_idxs", nargs="+", required=False, type=int)
+    parser.add_argument("--end_idxs", nargs="+", required=False, type=int)
     parser.add_argument("--data_root", default="/mnt/data5/spatial/data")
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--model", default="triplet-all-slides-0999")
@@ -59,6 +61,14 @@ def parse_args():
     parser.add_argument("--spot-frac", type=float, default=1)
 
     args = parser.parse_args()
+    if args.start_idxs is not None or args.end_idxs is not None:
+        assert args.start_idxs is not None
+        assert args.end_idxs is not None
+        assert len(args.start_idxs) == len(args.sections)
+        assert len(args.end_idxs) == len(args.sections)
+    else:
+        args.start_idxs = [-1] * len(args.sections)
+        args.end_idxs = [-1] * len(args.sections)
     return args
 
 
@@ -231,7 +241,7 @@ def get_path_counts(
         avg = counts.loc[counts_idxs, genes].mean(axis=0)
         path_counts[path_idx] = avg
     path_counts = pd.DataFrame(path_counts).T
-    return path_counts
+    return path_counts, path_idxs
 
 
 def read_image(section_path, fullres):
@@ -332,7 +342,7 @@ def select_end(
     circs.set_edgecolor(edgecolors)
     circs.set_alpha(alphas)
 
-    path_counts = get_path_counts(
+    path_counts, path_idxs = get_path_counts(
         avg_expression=avg_expression,
         pos_df=pos_df,
         counts=counts,
@@ -343,44 +353,50 @@ def select_end(
         clusters=clusters,
     )
     print(f"{section}: Calculated expression along path")
-    return path_counts
+    return path_counts, path_idxs, clusters
 
 
 def main(args):
     print(f"----- Section Selection -----")
     base_section = None
 
-    def pick_section(event):
-        for ax, section in zip(axs, args.sections):
-            if event.artist == ax:
-                nonlocal base_section
-                base_section = section
-                fig.canvas.mpl_disconnect(cid)
-                break
+    if len(args.sections) == 1:
+        base_section = args.sections[0]
+    else:
 
-    fig = plt.figure(figsize=(args.figsize, args.figsize))
-    n = int(np.ceil(np.sqrt(len(args.sections))))
-    gs = GridSpec(n, n, figure=fig)
-    axs = []
-    for i, section in enumerate(args.sections):
-        ax = fig.add_subplot(gs[i // n, i % n])
-        ax.tick_params(bottom=False, left=False, labelbottom=False, labelleft=False)
-        section_path = os.path.join(args.data_root, section)
-        im = read_image(section_path=section_path, fullres=False)
-        ax.imshow(im)
-        ax.set_title(section)
-        ax.set_picker(True)
-        axs.append(ax)
-    fig.suptitle("Select section to use as base path")
-    cid = fig.canvas.mpl_connect("pick_event", pick_section)
-    plt.show(block=False)
-    while base_section is None:
-        plt.pause(0.5)
-    plt.close(fig)
+        def pick_section(event):
+            for ax, section in zip(axs, args.sections):
+                if event.artist == ax:
+                    nonlocal base_section
+                    base_section = section
+                    fig.canvas.mpl_disconnect(cid)
+                    break
+
+        fig = plt.figure(figsize=(args.figsize, args.figsize))
+        n = int(np.ceil(np.sqrt(len(args.sections))))
+        gs = GridSpec(n, n, figure=fig)
+        axs = []
+        for i, section in enumerate(args.sections):
+            ax = fig.add_subplot(gs[i // n, i % n])
+            ax.tick_params(bottom=False, left=False, labelbottom=False, labelleft=False)
+            section_path = os.path.join(args.data_root, section)
+            im = read_image(section_path=section_path, fullres=False)
+            ax.imshow(im)
+            ax.set_title(section)
+            ax.set_picker(True)
+            axs.append(ax)
+        fig.suptitle("Select section to use as base path")
+        cid = fig.canvas.mpl_connect("pick_event", pick_section)
+        plt.show(block=False)
+        while base_section is None:
+            plt.pause(0.5)
+        plt.close(fig)
     print(f"Selected {base_section} as base section")
 
     all_path_counts = []
-    for section in args.sections:
+    for section, start_idx, end_idx in zip(
+        args.sections, args.start_idxs, args.end_idxs
+    ):
         print(f"----- {section} -----")
         section_path = os.path.join(args.data_root, section)
         pos_df, spot_radius = read_spatial_data(
@@ -403,50 +419,63 @@ def main(args):
         im = read_image(section_path=section_path, fullres=args.fullres)
         print(f"{section}: Loaded image")
 
+        def select_start_fn(start_idx):
+            select_start(
+                ax=ax,
+                pos_df=pos_df,
+                start_idx=start_idx,
+                circs=circs,
+                edgecolors=edgecolors,
+                alphas=alphas,
+            )
+            ax.set_title("Select end spot")
+
+        def select_end_fn(end_idx):
+            path_counts, path_idxs, clusters = select_end(
+                ax=ax,
+                pos_df=pos_df,
+                start_idx=start_idx,
+                end_idx=end_idx,
+                genes=args.genes,
+                path_alg=args.path_alg,
+                avg_expression=args.avg_expression,
+                counts=counts,
+                distances=distances,
+                hex_adj_mx=hex_adj_mx,
+                embed_adj_mx=embed_adj_mx,
+                adjacency=args.adjacency,
+                circs=circs,
+                facecolors=facecolors,
+                edgecolors=edgecolors,
+                alphas=alphas,
+                embeddings=embeddings,
+                spot_frac=args.spot_frac,
+                section=section,
+            )
+            ax.set_title(section)
+            print(f"{section}: Close the window")
+            all_path_counts.append(path_counts)
+            pd.DataFrame(
+                {"cluster": clusters, "center_idx": [path_idxs[i] for i in clusters]}
+            ).to_csv(
+                os.path.join(
+                    args.output_dir, "clusters-" + section.replace("/", "-") + ".csv"
+                ),
+                index=False,
+            )
+
         def onpick(event):
             nonlocal start_set, start_idx
             idx = event.ind[0]
             if not start_set:
                 start_idx = idx
                 start_set = True
-                select_start(
-                    ax=ax,
-                    pos_df=pos_df,
-                    start_idx=start_idx,
-                    circs=circs,
-                    edgecolors=edgecolors,
-                    alphas=alphas,
-                )
-                ax.set_title("Select end spot")
+                select_start_fn(start_idx)
             else:
                 end_idx = idx
                 fig.canvas.mpl_disconnect(cid)
-                path_counts = select_end(
-                    ax=ax,
-                    pos_df=pos_df,
-                    start_idx=start_idx,
-                    end_idx=end_idx,
-                    genes=args.genes,
-                    path_alg=args.path_alg,
-                    avg_expression=args.avg_expression,
-                    counts=counts,
-                    distances=distances,
-                    hex_adj_mx=hex_adj_mx,
-                    embed_adj_mx=embed_adj_mx,
-                    adjacency=args.adjacency,
-                    circs=circs,
-                    facecolors=facecolors,
-                    edgecolors=edgecolors,
-                    alphas=alphas,
-                    embeddings=embeddings,
-                    spot_frac=args.spot_frac,
-                    section=section,
-                )
-                ax.set_title(section)
-                print(f"{section}: Close the window")
-                all_path_counts.append(path_counts)
+                select_end_fn(end_idx)
 
-        start_idx = -1
         start_set = False
 
         plt.ion()
@@ -458,9 +487,13 @@ def main(args):
             spot_radius=spot_radius,
         )
         ax.set_title("Select start spot")
-        cid = fig.canvas.mpl_connect("pick_event", onpick)
 
-        plt.show(block=True)
+        if start_idx != -1 and end_idx != -1:
+            select_start_fn(start_idx)
+            select_end_fn(end_idx)
+        else:
+            cid = fig.canvas.mpl_connect("pick_event", onpick)
+            plt.show(block=True)
 
         fig.savefig(
             os.path.join(

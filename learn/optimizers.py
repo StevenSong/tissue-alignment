@@ -1,7 +1,6 @@
 from typing import Callable, Dict, Union
 
 import torch
-
 from utils import PARAMS
 
 GET_OPTIMIZER_FN = Callable[

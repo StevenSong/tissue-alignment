@@ -8,7 +8,6 @@ import torchvision.transforms as T
 from torch.utils.data import DataLoader, Dataset
 from torchvision.io import read_image
 from tqdm import tqdm
-
 from utils import PARAMS
 
 FILE_EXT = ".png"
@@ -189,6 +188,7 @@ def __hex_grid_adjacency_matrix(
     *,  # enforce kwargs
     pos_paths: List[str],
     data_paths: List[str],
+    in_slide_neg: bool,
 ) -> Tuple[np.ndarray, np.ndarray, pd.DataFrame]:
     cols = [
         "barcode",
@@ -237,11 +237,12 @@ def __hex_grid_adjacency_matrix(
     adj_spots &= slide_spots
     assert adj_spots.sum(axis=0).max() <= 6
 
-    # non-adj spots must also come from same slide
-    non_adj_spots = ~adj_spots & slide_spots
-
-    # non-adj spots from any slide in corpus
-    # non_adj_spots = ~adj_spots
+    if in_slide_neg:
+        # non-adj spots must also come from same slide
+        non_adj_spots = ~adj_spots & slide_spots
+    else:
+        # non-adj spots from any slide in corpus
+        non_adj_spots = ~adj_spots
 
     return adj_spots, non_adj_spots, pos_df
 
@@ -253,9 +254,9 @@ def __get_adj_tile_triplet_transform(
     non_adj_spots: np.ndarray,
     mean: Tuple[float, float, float],
     std: Tuple[float, float, float],
-    augment: bool,
+    augment: float,
 ) -> TRANSFORM_FN:
-    if augment:
+    if augment == 1:
         xform = T.Compose(
             [
                 T.RandomResizedCrop(size, scale=(0.2, 1.0), antialias=True),
@@ -266,6 +267,13 @@ def __get_adj_tile_triplet_transform(
                 T.RandomApply([T.GaussianBlur(5, sigma=(0.1, 2.0))], p=0.5),
                 T.RandomSolarize(0.5, p=0.2),
                 T.Normalize(mean=mean, std=std),
+            ]
+        )
+    elif augment == 0.5:
+        xform = T.Compose(
+            [
+                T.RandomHorizontalFlip(),
+                T.RandomVerticalFlip(),
             ]
         )
     else:
@@ -314,6 +322,9 @@ def get_pathology_adj_tile_triplet_loaders(
     adj_spots, non_adj_spots, pos_df = __hex_grid_adjacency_matrix(
         pos_paths=loader_params["position_table"],
         data_paths=data_paths,
+        in_slide_neg=bool(loader_params["in_slide_neg"])
+        if "in_slide_neg" in loader_params
+        else False,
     )
     train_ds = TileDataset(
         name="train",
@@ -323,7 +334,7 @@ def get_pathology_adj_tile_triplet_loaders(
     train_ds.tile_paths = pos_df["tile_path"].to_list()
     size = train_ds.get_tile_size()
     mean, std = train_ds.get_mean_std()
-    augment = bool(loader_params["augment"]) if "augment" in loader_params else False
+    augment = loader_params["augment"] if "augment" in loader_params else 0
     transform = __get_adj_tile_triplet_transform(
         size=size,
         adj_spots=adj_spots,
@@ -348,6 +359,9 @@ def get_pathology_adj_tile_triplet_loaders(
         eval_adj_spots, eval_non_adj_spots, eval_pos_df = __hex_grid_adjacency_matrix(
             pos_paths=eval_loader_params["position_table"],
             data_paths=eval_data_paths,
+            in_slide_neg=bool(eval_loader_params["in_slide_neg"])
+            if "in_slide_neg" in eval_loader_params
+            else False,
         )
         eval_transform = __get_adj_tile_triplet_transform(
             size=size,
@@ -355,7 +369,7 @@ def get_pathology_adj_tile_triplet_loaders(
             non_adj_spots=eval_non_adj_spots,
             mean=mean,
             std=std,
-            augment=False,
+            augment=0,
         )
         eval_ds = TileDataset(
             name="eval",

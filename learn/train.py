@@ -4,15 +4,14 @@ from typing import List, Tuple
 
 import numpy as np
 import torch
-from torch.utils.tensorboard import SummaryWriter
-from tqdm import tqdm
-
 from arguments import parse_args
 from dataloaders import DATALOADER_T, DATALOADERS
 from metrics import METRIC_T, METRICS
 from models import MODEL_T, MODELS
 from optimizers import OPTIMIZERS
 from schedulers import SCHEDULERS
+from torch.utils.tensorboard import SummaryWriter
+from tqdm import tqdm
 
 
 def _train_epoch(
