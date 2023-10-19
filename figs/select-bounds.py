@@ -38,6 +38,25 @@ def main(args):
     facecolors = np.asarray([list(to_rgba("lightgray"))] * n)
     edgecolors = np.asarray([list(to_rgba("darkgray"))] * n)
     alphas = np.full(n, 0.5)
+
+    sample = "151673"
+    if sample in args.section:
+        layer_to_barcode = {}
+        for i, l in enumerate(["L1", "L2", "L3", "L4", "L5", "L6", "WM"]):
+            with open(f"{sample}/{sample}_{l}_barcodes.txt") as f:
+                layer_to_barcode[i] = f.read().splitlines()
+        barcode_to_layer = {b: l for l, bs in layer_to_barcode.items() for b in bs}
+        num_layers = len(layer_to_barcode)
+        pos_df["layer"] = pos_df["barcode"].replace(barcode_to_layer)
+        tab10 = list(TABLEAU_COLORS)
+        layer_to_color = dict(zip(layer_to_barcode, tab10))
+        facecolors = np.asarray(
+            [
+                list(to_rgba(layer_to_color[l] if l in layer_to_color else "lightgray"))
+                for l in pos_df["layer"]
+            ]
+        )
+
     circs.set_facecolor(facecolors)
     circs.set_edgecolor(edgecolors)
     circs.set_alpha(alphas)
