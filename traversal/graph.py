@@ -5,6 +5,7 @@ import pandas as pd
 from pqdm.processes import pqdm
 from scipy.sparse.csgraph import shortest_path
 from sklearn.metrics import pairwise_distances
+from tqdm import tqdm
 
 
 def get_hex_grid_adj_matrix(pos_df):
@@ -55,7 +56,30 @@ def compute_path_idxs(distances, hex_adj_mx, start_idx, end_idx):
         prev_idx = predecessors[prev_idx]
     path_idxs.append(start_idx)
     path_idxs = path_idxs[::-1]
-    return path_idxs  # either list or list of lists
+    return path_idxs
+
+
+def compute_straight_path_idxs(pos_df, spot_radius, start_idx, end_idx):
+    coords = pos_df[["x", "y"]].to_numpy()
+
+    start = coords[start_idx]
+    end = coords[end_idx]
+
+    ref = end - start
+    diffs = coords - start
+    dots = np.dot(diffs, ref) / np.dot(ref, ref)
+    projs = np.broadcast_to(dots[:, None], (len(dots), 2)) * ref
+    orths = diffs - projs
+    dists = np.linalg.norm(orths, axis=1)
+
+    in_path = np.zeros(len(dists), dtype=bool)
+    in_path[dists <= spot_radius] = 1
+    in_path[(dots < 0) | (dots > np.linalg.norm(ref))] = 0  # behind start  # past end
+
+    idxs = np.nonzero(in_path)[0]
+    path_dots = dots[in_path]
+    path_idxs = idxs[np.argsort(path_dots)]
+    return path_idxs
 
 
 def compute_clusters(embeddings, centroids, spot_frac=1):
@@ -100,26 +124,28 @@ def compute_path_counts(
     counts,
     path_idxs,
     clusters,
+    parallel=-1,
 ):
     TEMP["pos_df"] = pos_df
     TEMP["counts"] = counts
     TEMP["clusters"] = clusters
-
-    counts = pqdm(
-        range(len(path_idxs)),
-        _get_cluster_count,
-        n_jobs=min(len(path_idxs), os.cpu_count()),
-    )
-    mean_counts = pd.concat([m for m, s in counts], axis=1).T
-    std_counts = pd.concat([s for m, s in counts], axis=1).T
-
-    # mean_counts = []
-    # std_counts = []
-    # for i in range(len(path_idxs)):
-    #     mean_count, std_count = _get_cluster_count(i)
-    #     mean_counts.append(mean_count)
-    #     std_counts.append(std_count)
-    # mean_counts = pd.concat(mean_counts, axis=1).T
-    # std_counts = pd.concat(std_counts, axis=1).T
-
+    if parallel != 0:
+        if parallel == -1:
+            parallel = os.cpu_count()
+        counts = pqdm(
+            range(len(path_idxs)),
+            _get_cluster_count,
+            n_jobs=min(len(path_idxs), os.cpu_count(), parallel),
+        )
+        mean_counts = pd.concat([m for m, s in counts], axis=1).T
+        std_counts = pd.concat([s for m, s in counts], axis=1).T
+    else:
+        mean_counts = []
+        std_counts = []
+        for i in tqdm(range(len(path_idxs))):
+            mean_count, std_count = _get_cluster_count(i)
+            mean_counts.append(mean_count)
+            std_counts.append(std_count)
+        mean_counts = pd.concat(mean_counts, axis=1).T
+        std_counts = pd.concat(std_counts, axis=1).T
     return mean_counts, std_counts

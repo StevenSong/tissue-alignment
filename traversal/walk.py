@@ -10,6 +10,7 @@ from graph import (
     compute_distance_matrix,
     compute_path_counts,
     compute_path_idxs,
+    compute_straight_path_idxs,
 )
 from io_utils import (
     read_embedding_data,
@@ -35,6 +36,8 @@ def parse_args():
     parser.add_argument("--model", required=True)
     parser.add_argument("--fullres", action="store_true")
     parser.add_argument("--figsize", type=int, default=8)
+    parser.add_argument("--batched", action="store_true")
+    parser.add_argument("--straight_path", action="store_true")
 
     args = parser.parse_args()
     return args
@@ -93,12 +96,20 @@ def main(args):
         pos_df=pos_df,
     )
     print(f"Computed distances")
-    path_idxs = compute_path_idxs(
-        distances=distances,
-        hex_adj_mx=hex_adj_mx,
-        start_idx=start_idx,
-        end_idx=end_idx,
-    )
+    if args.straight_path:
+        path_idxs = compute_straight_path_idxs(
+            pos_df=pos_df,
+            spot_radius=spot_radius,
+            start_idx=start_idx,
+            end_idx=end_idx,
+        )
+    else:
+        path_idxs = compute_path_idxs(
+            distances=distances,
+            hex_adj_mx=hex_adj_mx,
+            start_idx=start_idx,
+            end_idx=end_idx,
+        )
     print(f"Computed path")
     ax.set_title("")
     draw_path(
@@ -158,7 +169,10 @@ def main(args):
     # ----- Wait for Close -----
     ax.set_title("Close window when done")
     print("Close window when done")
-    plt.show(block=True)
+    if not args.batched:
+        plt.show(block=True)
+    else:
+        plt.close()
 
 
 if __name__ == "__main__":

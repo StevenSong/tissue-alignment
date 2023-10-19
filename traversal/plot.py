@@ -95,10 +95,11 @@ def dir_to_args(label, xy):
 
 def draw_start(ax, pos_df, start_idx, start_label, circs, edgecolors):
     edgecolors[start_idx] = to_rgba("black")
-    xy, ha, va = dir_to_args(start_label, pos_df.loc[start_idx, ["x", "y"]])
-    ax.annotate("Start", xy, color="black", ha=ha, va=va, size=10, weight="bold")
+    if start_label is not None:
+        xy, ha, va = dir_to_args(start_label, pos_df.loc[start_idx, ["x", "y"]])
+        ax.annotate("Start", xy, color="black", ha=ha, va=va, size=10, weight="bold")
     circs.set_edgecolor(edgecolors)
-    plt.pause(1)
+    # plt.pause(1)
 
 
 def draw_path(ax, pos_df, path_idxs, end_label, circs, edgecolors):
@@ -106,16 +107,26 @@ def draw_path(ax, pos_df, path_idxs, end_label, circs, edgecolors):
     count = 1
     for path_idx in path_idxs[1:]:  # last index includes end_idx
         edgecolors[path_idx] = to_rgba("black")
-        if path_idx == path_idxs[-1]:
+        if path_idx == path_idxs[-1] and end_label is not None:
             xy, ha, va = dir_to_args(end_label, pos_df.loc[path_idx, ["x", "y"]])
             ax.annotate("End", xy, color="black", ha=ha, va=va, size=10, weight="bold")
         count += 1
     circs.set_edgecolor(edgecolors)
-    plt.pause(1)
+    # plt.pause(1)
 
 
-def draw_clusters(fig, ax, path_idxs, clusters, circs, facecolors):
-    cmap = colormaps["gist_rainbow"]
+def draw_clusters(
+    fig,
+    ax,
+    path_idxs,
+    clusters,
+    circs,
+    facecolors,
+    edgecolors=None,
+    cm_name="gist_rainbow",
+    show_cbar=True,
+):
+    cmap = colormaps[cm_name]
     cmap_interp = np.linspace(0, 1, len(path_idxs))
     facecolors = np.asarray(
         [
@@ -124,25 +135,37 @@ def draw_clusters(fig, ax, path_idxs, clusters, circs, facecolors):
         ]
     )
     circs.set_facecolor(facecolors)
+    if edgecolors is not None:
+        idxs = set(path_idxs)
+        edgecolors = np.asarray(
+            [
+                list(cmap(cmap_interp[i]))
+                if i != -1 and idx not in idxs
+                else edgecolors[idx]
+                for idx, i in enumerate(clusters)
+            ]
+        )
+        circs.set_edgecolor(edgecolors)
 
-    bbox = ax.get_position()
-    bounds = bbox.get_points()
-    width = bounds[1, 0] - bounds[0, 0]
-    height = bounds[1, 1] - bounds[0, 1]
-    bounds[0, 0] += width / 10  # xmin
-    bounds[0, 1] += height / 100 * 2.5  # ymin
-    bounds[1, 0] -= width / 10  # xmax
-    bounds[1, 1] -= height / 100 * 95  # ymax
-    bbox.set_points(bounds)
-    cax = plt.Axes(fig, bbox)
-    cax.set_xticks([])
-    cax.set_yticks([])
-    fig.add_axes(cax)
+    if show_cbar:
+        bbox = ax.get_position()
+        bounds = bbox.get_points()
+        width = bounds[1, 0] - bounds[0, 0]
+        height = bounds[1, 1] - bounds[0, 1]
+        bounds[0, 0] += width / 10  # xmin
+        bounds[0, 1] += height / 100 * 2.5  # ymin
+        bounds[1, 0] -= width / 10  # xmax
+        bounds[1, 1] -= height / 100 * 95  # ymax
+        bbox.set_points(bounds)
+        cax = plt.Axes(fig, bbox)
+        cax.set_xticks([])
+        cax.set_yticks([])
+        fig.add_axes(cax)
 
-    sm = ScalarMappable(norm=Normalize(vmin=0, vmax=len(path_idxs) - 1), cmap=cmap)
-    fig.colorbar(sm, cax, orientation="horizontal")
-    cax.set_xticks([0, len(path_idxs) - 1])
-    cax.set_xticklabels(["Start", "End"])
-    cax.tick_params(top=True, labeltop=True, bottom=False, labelbottom=False)
+        sm = ScalarMappable(norm=Normalize(vmin=0, vmax=len(path_idxs) - 1), cmap=cmap)
+        fig.colorbar(sm, cax, orientation="horizontal")
+        cax.set_xticks([0, len(path_idxs) - 1])
+        cax.set_xticklabels(["Start", "End"])
+        cax.tick_params(top=True, labeltop=True, bottom=False, labelbottom=False)
 
-    plt.pause(1)
+    # plt.pause(1)

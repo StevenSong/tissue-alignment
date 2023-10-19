@@ -53,8 +53,8 @@ def read_transcription_data(section_path):
     # don't bother reindexing, just use barcodes to index between count and pos
 
     # only keep genes where at least 15% of spots have nonzero UMI
-    nonzero_UMI_frac = (df != 0).sum(axis=0) / len(df)
-    df = df.loc[:, nonzero_UMI_frac >= 0.15]
+    # nonzero_UMI_frac = (df != 0).sum(axis=0) / len(df)
+    # df = df.loc[:, nonzero_UMI_frac >= 0.15]
 
     target = 10_000  # 10_000 counts per spot (or per slide)
     t = df.shape[1]  # number of spots in slide
