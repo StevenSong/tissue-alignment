@@ -161,4 +161,6 @@ cython_debug/
 
 *.csv
 *.npy
+*.png
+*.pdf
 151673/

@@ -164,8 +164,25 @@ def draw_clusters(
 
         sm = ScalarMappable(norm=Normalize(vmin=0, vmax=len(path_idxs) - 1), cmap=cmap)
         fig.colorbar(sm, cax, orientation="horizontal")
-        cax.set_xticks([0, len(path_idxs) - 1])
-        cax.set_xticklabels(["Start", "End"])
-        cax.tick_params(top=True, labeltop=True, bottom=False, labelbottom=False)
+        cax.set_axis_off()
+        cax_bbox = cax.get_position()
+        x_offset = cax_bbox.width * 0.025
+        y_center = cax_bbox.ymax - cax_bbox.height / 2
+        fig.text(
+            cax_bbox.xmin - x_offset,
+            y_center,
+            "Start",
+            weight="bold",
+            ha="right",
+            va="center",
+        )
+        fig.text(
+            cax_bbox.xmax + x_offset,
+            y_center,
+            "End",
+            weight="bold",
+            ha="left",
+            va="center",
+        )
 
     # plt.pause(1)
