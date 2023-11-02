@@ -57,7 +57,7 @@ def read_transcription_data(section_path):
     # df = df.loc[:, nonzero_UMI_frac >= 0.15]
 
     target = 10_000  # 10_000 counts per spot (or per slide)
-    t = df.shape[1]  # number of spots in slide
+    t = df.shape[0]  # number of spots in slide
     z = df.to_numpy().sum()  # sum of all counts in slide
     df = df * t / z * target  # (z/t) is average count per spot for the slide
     df = np.log1p(df)

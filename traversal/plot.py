@@ -1,6 +1,6 @@
 import matplotlib.pyplot as plt
 import numpy as np
-from matplotlib import colormaps
+from matplotlib import colormaps, patheffects
 from matplotlib.cm import ScalarMappable
 from matplotlib.collections import PatchCollection
 from matplotlib.colors import Normalize, to_rgba
@@ -93,23 +93,41 @@ def dir_to_args(label, xy):
     return (x, y), ha, va
 
 
-def draw_start(ax, pos_df, start_idx, start_label, circs, edgecolors):
+def draw_start(ax, pos_df, start_idx, start_label, circs, edgecolors, fontsize=10):
     edgecolors[start_idx] = to_rgba("black")
     if start_label is not None:
         xy, ha, va = dir_to_args(start_label, pos_df.loc[start_idx, ["x", "y"]])
-        ax.annotate("Start", xy, color="black", ha=ha, va=va, size=10, weight="bold")
+        ax.annotate(
+            "Start",
+            xy,
+            color="black",
+            ha=ha,
+            va=va,
+            size=fontsize,
+            weight="bold",
+            path_effects=[patheffects.withStroke(linewidth=2, foreground="white")],
+        )
     circs.set_edgecolor(edgecolors)
     # plt.pause(1)
 
 
-def draw_path(ax, pos_df, path_idxs, end_label, circs, edgecolors):
+def draw_path(ax, pos_df, path_idxs, end_label, circs, edgecolors, fontsize=10):
     # edgecolor for path
     count = 1
     for path_idx in path_idxs[1:]:  # last index includes end_idx
         edgecolors[path_idx] = to_rgba("black")
         if path_idx == path_idxs[-1] and end_label is not None:
             xy, ha, va = dir_to_args(end_label, pos_df.loc[path_idx, ["x", "y"]])
-            ax.annotate("End", xy, color="black", ha=ha, va=va, size=10, weight="bold")
+            ax.annotate(
+                "End",
+                xy,
+                color="black",
+                ha=ha,
+                va=va,
+                size=fontsize,
+                weight="bold",
+                path_effects=[patheffects.withStroke(linewidth=2, foreground="white")],
+            )
         count += 1
     circs.set_edgecolor(edgecolors)
     # plt.pause(1)
@@ -125,26 +143,23 @@ def draw_clusters(
     edgecolors=None,
     cm_name="gist_rainbow",
     show_cbar=True,
+    discrete_cm=False,
+    fontsize=10,
 ):
     cmap = colormaps[cm_name]
-    cmap_interp = np.linspace(0, 1, len(path_idxs))
-    facecolors = np.asarray(
-        [
-            list(cmap(cmap_interp[i])) if i != -1 else facecolors[idx]
-            for idx, i in enumerate(clusters)
-        ]
-    )
+    if discrete_cm:
+        cmap_interp = np.arange(len(path_idxs))
+    else:
+        cmap_interp = np.linspace(0, 1, len(path_idxs))
+
+    idxs = set(path_idxs)
+    for idx, i in enumerate(clusters):
+        if i != -1:
+            facecolors[idx] = list(cmap(cmap_interp[i]))
+            if edgecolors is not None and idx not in idxs:
+                edgecolors[idx] = list(cmap(cmap_interp[i]))
     circs.set_facecolor(facecolors)
     if edgecolors is not None:
-        idxs = set(path_idxs)
-        edgecolors = np.asarray(
-            [
-                list(cmap(cmap_interp[i]))
-                if i != -1 and idx not in idxs
-                else edgecolors[idx]
-                for idx, i in enumerate(clusters)
-            ]
-        )
         circs.set_edgecolor(edgecolors)
 
     if show_cbar:
@@ -166,7 +181,7 @@ def draw_clusters(
         fig.colorbar(sm, cax, orientation="horizontal")
         cax.set_axis_off()
         cax_bbox = cax.get_position()
-        x_offset = cax_bbox.width * 0.025
+        x_offset = cax_bbox.width * 0.01
         y_center = cax_bbox.ymax - cax_bbox.height / 2
         fig.text(
             cax_bbox.xmin - x_offset,
@@ -175,6 +190,8 @@ def draw_clusters(
             weight="bold",
             ha="right",
             va="center",
+            fontsize=fontsize,
+            path_effects=[patheffects.withStroke(linewidth=2, foreground="white")],
         )
         fig.text(
             cax_bbox.xmax + x_offset,
@@ -183,6 +200,8 @@ def draw_clusters(
             weight="bold",
             ha="left",
             va="center",
+            fontsize=fontsize,
+            path_effects=[patheffects.withStroke(linewidth=2, foreground="white")],
         )
 
     # plt.pause(1)
