@@ -30,3 +30,5 @@ Data should be organized as follows:
 └── dlpfc
     └── [...]
 ```
+
+GitHub classifies this repository as 99% Jupyter Notebook because the paper figures are saved within each notebook, thus drastically inflating the file size of each notebook. The bulk of the methods are however written in plain python files.
